@@ -1,0 +1,609 @@
+// Band Manager — Prisma schema
+// See docs/spec.md §5 (base) with overrides from §14–16 (later addenda win).
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ------------------------------------------------------------------
+// Enums (fixed sets). Extensible sets (AttendanceStatus, EventType)
+// are lookup TABLES, not enums — see §5 / §14.9.
+// ------------------------------------------------------------------
+
+enum GlobalRole {
+  SUPERADMIN
+  USER
+}
+
+enum ActRole {
+  ADMIN
+  MEMBER
+  READONLY
+}
+
+enum SkillLevel {
+  BEGINNER
+  INTERMEDIATE
+  ADVANCED
+  PROFESSIONAL
+}
+
+enum SongStatus {
+  IDEA
+  REHEARSING
+  REHEARSED
+  PERFORMED
+  RETIRED
+}
+
+enum SongPlatform {
+  SPOTIFY
+  YOUTUBE
+  APPLE_MUSIC
+  SOUNDCLOUD
+  OTHER
+}
+
+enum CalendarKind {
+  REHEARSAL
+  EVENT
+}
+
+enum FileEntityType {
+  SONG
+  SONG_VERSION
+  CALENDAR_ENTRY
+}
+
+enum FileKind {
+  LEAD_SHEET
+  LYRICS
+  ATTACHMENT
+  OTHER
+}
+
+// §17 — booking flow, confirmations & notifications
+enum EntryStatus {
+  TENTATIVE
+  CONFIRMED
+  CANCELLED
+}
+
+enum BookingStatus {
+  OPEN
+  CONFIRMED
+  CANCELLED
+}
+
+enum AvailabilityAnswer {
+  AVAILABLE
+  NOT_AVAILABLE
+  MAYBE
+}
+
+enum NotificationType {
+  BOOKING_POLL
+  NUDGE
+  DEADLINE_REMINDER
+  DATE_CONFIRMED
+  ENTRY_CHANGED
+  BOOKING_CANCELLED
+}
+
+// ------------------------------------------------------------------
+// Auth (better-auth managed core + domain fields)
+// ------------------------------------------------------------------
+
+model User {
+  id            String     @id @default(cuid())
+  name          String
+  email         String     @unique
+  emailVerified Boolean    @default(false)
+  image         String?
+  globalRole    GlobalRole @default(USER)
+  isActive      Boolean    @default(true)
+  createdAt     DateTime   @default(now())
+  updatedAt     DateTime   @updatedAt
+
+  profile          UserProfile?
+  memberships      ActMembership[]
+  sessions         Session[]
+  accounts         Account[]
+  songStatuses     UserSongStatus[]
+  attendances      Attendance[]
+  createdActs      Act[]            @relation("ActCreatedBy")
+  createdEntries   CalendarEntry[]  @relation("EntryCreatedBy")
+  uploadedFiles    FileAsset[]      @relation("FileUploadedBy")
+  sentInvitations  Invitation[]     @relation("InvitedBy")
+  createdBookings       BookingGroup[]         @relation("BookingCreatedBy")
+  availabilityResponses AvailabilityResponse[]
+  acknowledgements      EntryAcknowledgement[]
+  changeLogs            EntryChangeLog[]       @relation("ChangeLogBy")
+  notifications         Notification[]
+  calendarFeedToken     CalendarFeedToken?
+
+  @@map("user")
+}
+
+model Session {
+  id        String   @id @default(cuid())
+  expiresAt DateTime
+  token     String   @unique
+  ipAddress String?
+  userAgent String?
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("session")
+}
+
+model Account {
+  id                    String    @id @default(cuid())
+  accountId             String
+  providerId            String
+  userId                String
+  user                  User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  accessToken           String?
+  refreshToken          String?
+  idToken               String?
+  accessTokenExpiresAt  DateTime?
+  refreshTokenExpiresAt DateTime?
+  scope                 String?
+  password              String?
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
+
+  @@map("account")
+}
+
+model Verification {
+  id         String   @id @default(cuid())
+  identifier String
+  value      String
+  expiresAt  DateTime
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@map("verification")
+}
+
+// ------------------------------------------------------------------
+// Profiles & acts
+// ------------------------------------------------------------------
+
+model UserProfile {
+  id          String      @id @default(cuid())
+  userId      String      @unique
+  user        User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  instruments String[]    @default([])
+  skillLevel  SkillLevel?
+  // equipment: array of { name, category, notes }
+  equipment   Json        @default("[]")
+  bio         String?
+  createdAt   DateTime    @default(now())
+  updatedAt   DateTime    @updatedAt
+
+  @@map("user_profile")
+}
+
+model Act {
+  id          String   @id @default(cuid())
+  name        String
+  slug        String   @unique
+  description String?
+  // IANA timezone (§14.1). Defaults from DEFAULT_TZ at creation.
+  timezone    String
+  createdById String?
+  createdBy   User?    @relation("ActCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  memberships    ActMembership[]
+  songs          Song[]
+  eventTypes     EventType[]
+  calendarEntries CalendarEntry[]
+  disabledEventTypes ActDisabledEventType[]
+  bookingGroups  BookingGroup[]
+
+  @@map("act")
+}
+
+model ActMembership {
+  id        String   @id @default(cuid())
+  actId     String
+  act       Act      @relation(fields: [actId], references: [id], onDelete: Cascade)
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  role      ActRole  @default(MEMBER)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([actId, userId])
+  @@index([userId])
+  @@map("act_membership")
+}
+
+model Invitation {
+  id          String    @id @default(cuid())
+  email       String
+  // Only the SHA-256 hash of the token is stored (§15.4).
+  tokenHash   String    @unique
+  invitedById String?
+  invitedBy   User?     @relation("InvitedBy", fields: [invitedById], references: [id], onDelete: SetNull)
+  expiresAt   DateTime
+  acceptedAt  DateTime?
+  // grants: array of { actId, role }
+  grants      Json
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  @@index([email])
+  @@map("invitation")
+}
+
+// ------------------------------------------------------------------
+// Songs
+// ------------------------------------------------------------------
+
+model Song {
+  id          String     @id @default(cuid())
+  actId       String
+  act         Act        @relation(fields: [actId], references: [id], onDelete: Cascade)
+  title       String
+  artist      String?
+  style       String?
+  key         String?
+  tempoBpm    Int?
+  durationSec Int?
+  lyrics      String?
+  notes       String?
+  status      SongStatus @default(IDEA)
+  createdAt   DateTime   @default(now())
+  updatedAt   DateTime   @updatedAt
+
+  links        SongLink[]
+  versions     SongVersion[]
+  userStatuses UserSongStatus[]
+  setlistItems SetlistItem[]
+
+  @@index([actId])
+  @@map("song")
+}
+
+model SongLink {
+  id        String       @id @default(cuid())
+  songId    String
+  song      Song         @relation(fields: [songId], references: [id], onDelete: Cascade)
+  versionId String?
+  version   SongVersion? @relation(fields: [versionId], references: [id], onDelete: SetNull)
+  platform  SongPlatform
+  url       String
+  label     String?
+  createdAt DateTime     @default(now())
+  updatedAt DateTime     @updatedAt
+
+  @@index([songId])
+  @@map("song_link")
+}
+
+model SongVersion {
+  id        String   @id @default(cuid())
+  songId    String
+  song      Song     @relation(fields: [songId], references: [id], onDelete: Cascade)
+  name      String
+  key       String?
+  notes     String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  links        SongLink[]
+  setlistItems SetlistItem[]
+
+  @@index([songId])
+  @@map("song_version")
+}
+
+model UserSongStatus {
+  id              String    @id @default(cuid())
+  userId          String
+  user            User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  songId          String
+  song            Song      @relation(fields: [songId], references: [id], onDelete: Cascade)
+  rehearsed       Boolean   @default(false)
+  rehearsedAt     DateTime?
+  performedCount  Int       @default(0)
+  lastPerformedAt DateTime?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  @@unique([userId, songId])
+  @@index([songId])
+  @@map("user_song_status")
+}
+
+// ------------------------------------------------------------------
+// Lookup tables (extensible — §14.9)
+// ------------------------------------------------------------------
+
+model EventType {
+  id        String   @id @default(cuid())
+  // null actId = global default (managed by superadmin only, §14.8)
+  actId     String?
+  act       Act?     @relation(fields: [actId], references: [id], onDelete: Cascade)
+  name      String
+  sortOrder Int      @default(0)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  calendarEntries CalendarEntry[]
+  disabledInActs  ActDisabledEventType[]
+
+  @@index([actId])
+  @@map("event_type")
+}
+
+// Per-act suppression of a GLOBAL event type so unused ones don't clutter the
+// picker (act admins toggle these in settings).
+model ActDisabledEventType {
+  id          String    @id @default(cuid())
+  actId       String
+  act         Act       @relation(fields: [actId], references: [id], onDelete: Cascade)
+  eventTypeId String
+  eventType   EventType @relation(fields: [eventTypeId], references: [id], onDelete: Cascade)
+  createdAt   DateTime  @default(now())
+
+  @@unique([actId, eventTypeId])
+  @@index([actId])
+  @@map("act_disabled_event_type")
+}
+
+model AttendanceStatus {
+  // Seed/SQL managed only in v1 (§16.2). `key` immutable once referenced.
+  key       String   @id
+  label     String
+  color     String
+  sortOrder Int      @default(0)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  attendances Attendance[]
+
+  @@map("attendance_status")
+}
+
+// ------------------------------------------------------------------
+// Calendar
+// ------------------------------------------------------------------
+
+model CalendarEntry {
+  id              String       @id @default(cuid())
+  actId           String
+  act             Act          @relation(fields: [actId], references: [id], onDelete: Cascade)
+  kind            CalendarKind
+  eventTypeId     String?
+  eventType       EventType?   @relation(fields: [eventTypeId], references: [id], onDelete: Restrict)
+  title           String
+  // All datetimes stored UTC (§14.1). startsAt required.
+  startsAt        DateTime
+  locationName    String?
+  locationAddress String?
+  locationUrl     String?
+  loadInAt        DateTime?
+  soundcheckAt    DateTime?
+  downbeatAt      DateTime?
+  loadOutAt       DateTime?
+  notes           String?
+  status          EntryStatus  @default(CONFIRMED)
+  version         Int          @default(1)
+  bookingGroupId  String?
+  bookingGroup    BookingGroup? @relation("BookingCandidates", fields: [bookingGroupId], references: [id], onDelete: SetNull)
+  createdById     String?
+  createdBy       User?        @relation("EntryCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  createdAt       DateTime     @default(now())
+  updatedAt       DateTime     @updatedAt
+
+  attendances Attendance[]
+  setlists    Setlist[]
+  availabilityResponses AvailabilityResponse[]
+  acknowledgements      EntryAcknowledgement[]
+  changeLogs            EntryChangeLog[]
+  confirmedForGroup     BookingGroup? @relation("ConfirmedEntry")
+
+  @@index([actId])
+  @@index([startsAt])
+  @@index([bookingGroupId])
+  @@map("calendar_entry")
+}
+
+// ------------------------------------------------------------------
+// §17 — bookings, availability, acknowledgements, notifications
+// ------------------------------------------------------------------
+
+model BookingGroup {
+  id                     String        @id @default(cuid())
+  actId                  String
+  act                    Act           @relation(fields: [actId], references: [id], onDelete: Cascade)
+  title                  String
+  customerName           String?
+  customerContact        String?
+  venueNotes             String?
+  responseDeadline       DateTime?
+  status                 BookingStatus @default(OPEN)
+  createdById            String?
+  createdBy              User?         @relation("BookingCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  confirmedEntryId       String?        @unique
+  confirmedEntry         CalendarEntry? @relation("ConfirmedEntry", fields: [confirmedEntryId], references: [id], onDelete: SetNull)
+  deadlineReminderSentAt DateTime?
+  createdAt              DateTime      @default(now())
+  updatedAt              DateTime      @updatedAt
+
+  candidates CalendarEntry[] @relation("BookingCandidates")
+
+  @@index([actId])
+  @@map("booking_group")
+}
+
+model AvailabilityResponse {
+  id          String             @id @default(cuid())
+  entryId     String
+  entry       CalendarEntry      @relation(fields: [entryId], references: [id], onDelete: Cascade)
+  userId      String
+  user        User               @relation(fields: [userId], references: [id], onDelete: Cascade)
+  answer      AvailabilityAnswer
+  respondedAt DateTime           @default(now())
+
+  @@unique([entryId, userId])
+  @@index([userId])
+  @@map("availability_response")
+}
+
+model EntryAcknowledgement {
+  id             String        @id @default(cuid())
+  entryId        String
+  entry          CalendarEntry @relation(fields: [entryId], references: [id], onDelete: Cascade)
+  userId         String
+  user           User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  acknowledgedAt DateTime      @default(now())
+  versionAtAck   Int
+
+  @@unique([entryId, userId])
+  @@index([userId])
+  @@map("entry_acknowledgement")
+}
+
+model EntryChangeLog {
+  id          String        @id @default(cuid())
+  entryId     String
+  entry       CalendarEntry @relation(fields: [entryId], references: [id], onDelete: Cascade)
+  changedById String?
+  changedBy   User?         @relation("ChangeLogBy", fields: [changedById], references: [id], onDelete: SetNull)
+  changedAt   DateTime      @default(now())
+  // changes: [{ field, old, new }] — append-only, immutable.
+  changes     Json
+
+  @@index([entryId])
+  @@map("entry_change_log")
+}
+
+model Notification {
+  id        String           @id @default(cuid())
+  userId    String
+  user      User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  type      NotificationType
+  title     String
+  body      String
+  linkPath  String
+  readAt    DateTime?
+  createdAt DateTime         @default(now())
+
+  @@index([userId, readAt])
+  @@map("notification")
+}
+
+model CalendarFeedToken {
+  id        String   @id @default(cuid())
+  userId    String   @unique
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tokenHash String   @unique
+  createdAt DateTime @default(now())
+
+  @@map("calendar_feed_token")
+}
+
+model Attendance {
+  id        String           @id @default(cuid())
+  entryId   String
+  entry     CalendarEntry    @relation(fields: [entryId], references: [id], onDelete: Cascade)
+  userId    String
+  user      User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  statusKey String
+  status    AttendanceStatus @relation(fields: [statusKey], references: [key], onDelete: Restrict)
+  createdAt DateTime         @default(now())
+  updatedAt DateTime         @updatedAt
+
+  @@unique([entryId, userId])
+  @@index([userId])
+  @@map("attendance")
+}
+
+model Setlist {
+  id        String        @id @default(cuid())
+  entryId   String
+  entry     CalendarEntry @relation(fields: [entryId], references: [id], onDelete: Cascade)
+  name      String        @default("Set 1")
+  sortOrder Int           @default(0)
+  createdAt DateTime      @default(now())
+  updatedAt DateTime      @updatedAt
+
+  items SetlistItem[]
+
+  @@index([entryId])
+  @@map("setlist")
+}
+
+model SetlistItem {
+  id            String       @id @default(cuid())
+  setlistId     String
+  setlist       Setlist      @relation(fields: [setlistId], references: [id], onDelete: Cascade)
+  position      Int
+  songId        String
+  // Restrict: blocks hard-deleting a song referenced by a setlist (§14.4).
+  song          Song         @relation(fields: [songId], references: [id], onDelete: Restrict)
+  songVersionId String?
+  songVersion   SongVersion? @relation(fields: [songVersionId], references: [id], onDelete: SetNull)
+  notes         String?
+  createdAt     DateTime     @default(now())
+  updatedAt     DateTime     @updatedAt
+
+  @@index([setlistId])
+  @@index([songId])
+  @@map("setlist_item")
+}
+
+// ------------------------------------------------------------------
+// Files (polymorphic — §10 / §14.4)
+// ------------------------------------------------------------------
+
+model FileAsset {
+  id           String         @id @default(cuid())
+  entityType   FileEntityType
+  entityId     String
+  kind         FileKind       @default(ATTACHMENT)
+  // actId denormalized for authz scoping on the file route.
+  actId        String
+  filename     String
+  storagePath  String
+  mimeType     String
+  sizeBytes    Int
+  uploadedById String?
+  uploadedBy   User?          @relation("FileUploadedBy", fields: [uploadedById], references: [id], onDelete: SetNull)
+  createdAt    DateTime       @default(now())
+  updatedAt    DateTime       @updatedAt
+
+  @@index([entityType, entityId])
+  @@index([actId])
+  @@map("file_asset")
+}
+
+// ------------------------------------------------------------------
+// Rate limiting (DB-backed — §16.3)
+// ------------------------------------------------------------------
+
+model RateLimitBucket {
+  id             String   @id @default(cuid())
+  // format: {scope}:{ip}:{email} where scope in login|reset|invite_accept
+  key            String   @unique
+  windowStartsAt DateTime
+  count          Int      @default(0)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  @@map("rate_limit_bucket")
+}

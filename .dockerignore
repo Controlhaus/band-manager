@@ -1,0 +1,16 @@
+Dockerfile
+.dockerignore
+node_modules
+npm-debug.log
+.next
+.git
+.gitignore
+README.md
+.env
+.env*.local
+/uploads
+/coverage
+/test-results
+/playwright-report
+docker-compose*.yml
+Caddyfile

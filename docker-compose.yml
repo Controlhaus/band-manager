@@ -1,0 +1,79 @@
+# Band Manager — production Docker Compose (§11).
+# Local development: `docker compose up -d db` brings up only Postgres,
+# published on 127.0.0.1:5432 so the host-side `npm run dev` can connect.
+
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-band}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-change-me}
+      POSTGRES_DB: ${POSTGRES_DB:-band}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    # Bound to localhost only (not public, satisfies §9). Enables host dev.
+    # Host port 5433 avoids clashes with a local Postgres/SSH tunnel on 5432.
+    # On the VPS the app reaches the db over the internal network regardless;
+    # this mapping can be removed there if host access is not needed.
+    ports:
+      - "127.0.0.1:5433:5432"
+    healthcheck:
+      test:
+        ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-band} -d ${POSTGRES_DB:-band}"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+    networks:
+      - internal
+
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    env_file:
+      - .env
+    environment:
+      NODE_ENV: production
+      # Inside the compose network the app always reaches the db by service name.
+      DATABASE_URL: postgresql://${POSTGRES_USER:-band}:${POSTGRES_PASSWORD:-change-me}@db:5432/${POSTGRES_DB:-band}?schema=public
+      UPLOAD_DIR: /data/uploads
+      # Single-node deployment: run the deadline-reminder scheduler here.
+      ENABLE_SCHEDULER: "true"
+    volumes:
+      - uploads:/data/uploads
+    networks:
+      - internal
+    expose:
+      - "3000"
+
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    depends_on:
+      - app
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      APP_DOMAIN: ${APP_DOMAIN}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    networks:
+      - internal
+
+volumes:
+  pgdata:
+  uploads:
+  caddy_data:
+  caddy_config:
+
+networks:
+  internal:
+    driver: bridge

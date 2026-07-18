@@ -1,0 +1,20 @@
+# Caddy reverse proxy with automatic HTTPS (§11).
+# APP_DOMAIN must match the host in APP_URL.
+
+{$APP_DOMAIN} {
+	encode gzip zstd
+
+	# Cap request bodies at the app's upload limit (matches MAX_UPLOAD_MB).
+	request_body {
+		max_size {$MAX_UPLOAD_MB:25}MB
+	}
+
+	reverse_proxy app:3000
+
+	header {
+		Strict-Transport-Security "max-age=63072000; includeSubDomains; preload"
+		X-Content-Type-Options "nosniff"
+		Referrer-Policy "strict-origin-when-cross-origin"
+		-Server
+	}
+}

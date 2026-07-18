@@ -1,0 +1,21 @@
+# Throwaway Postgres for running the test suites (§14.10).
+# Usage: docker compose -f docker-compose.test.yml up -d
+#        DATABASE_URL=postgresql://test:test@localhost:5434/test?schema=public \
+#          npx prisma migrate deploy && npm test
+
+services:
+  test-db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: test
+      POSTGRES_PASSWORD: test
+      POSTGRES_DB: test
+    ports:
+      - "127.0.0.1:5434:5432"
+    tmpfs:
+      - /var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U test -d test"]
+      interval: 3s
+      timeout: 3s
+      retries: 10
