@@ -11,6 +11,7 @@ import { prisma } from "@/lib/prisma";
 export const CATALOG_PAGE_SIZE = 50;
 
 export type CatalogSort =
+  | "default"
   | "title"
   | "artist"
   | "album"
@@ -26,6 +27,8 @@ export type CatalogSort =
 
 // Whitelist: sort key → safe SQL expression.
 const SORT_SQL: Record<CatalogSort, string> = {
+  // "default" groups by artist → album → track number (see queryCatalog).
+  default: "s.artist",
   title: "s.title",
   artist: "s.artist",
   album: "s.album",
@@ -97,7 +100,16 @@ export async function queryCatalog(q: CatalogQuery): Promise<CatalogResult> {
 
   const col = SORT_SQL[q.sort];
   const dir = q.order === "desc" ? "DESC" : "ASC";
-  const orderBy = Prisma.raw(`${col} ${dir} NULLS LAST, s.title ASC`);
+  // Default view: group same artist together, then same album, then ascending
+  // track number. Songs missing a field sort after those that have it (NULLS
+  // LAST at each level), then by title.
+  const orderBy =
+    q.sort === "default"
+      ? Prisma.raw(
+          `s.artist ${dir} NULLS LAST, s.album ${dir} NULLS LAST, ` +
+            `s."trackNo" ${dir} NULLS LAST, s.title ASC`,
+        )
+      : Prisma.raw(`${col} ${dir} NULLS LAST, s.title ASC`);
 
   const offset = (q.page - 1) * CATALOG_PAGE_SIZE;
 

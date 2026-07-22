@@ -29,8 +29,10 @@ export default async function SetListDetailPage({
               song: { select: { id: true, title: true, artist: true, durationSec: true } },
             },
           },
+          links: { orderBy: { sortOrder: "asc" } },
         },
       },
+      links: { orderBy: { sortOrder: "asc" } },
       bookings: { select: { id: true, title: true }, orderBy: { createdAt: "desc" } },
     },
   });
@@ -48,6 +50,7 @@ export default async function SetListDetailPage({
     id: s.id,
     name: s.name,
     notes: s.notes,
+    links: s.links.map((l) => ({ id: l.id, url: l.url, label: l.label })),
     entries: s.entries.map((e) => ({
       id: e.id,
       kind: e.kind,
@@ -65,7 +68,12 @@ export default async function SetListDetailPage({
     <SetListEditor
       slug={slug}
       canWrite={canWrite}
-      setList={{ id: setList.id, name: setList.name, notes: setList.notes }}
+      setList={{
+        id: setList.id,
+        name: setList.name,
+        notes: setList.notes,
+        links: setList.links.map((l) => ({ id: l.id, url: l.url, label: l.label })),
+      }}
       sets={sets}
       catalog={catalog}
       bookings={setList.bookings.map((b) => ({

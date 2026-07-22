@@ -28,7 +28,7 @@ export default async function SongsPage({
   if (!act) notFound();
 
   const sort: CatalogSort =
-    sp.sort && isCatalogSort(sp.sort) ? sp.sort : "title";
+    sp.sort && isCatalogSort(sp.sort) ? sp.sort : "default";
   const order = sp.order === "desc" ? "desc" : "asc";
   const page = Math.max(1, Number(sp.page ?? "1") || 1);
 
@@ -72,6 +72,7 @@ export default async function SongsPage({
         order={order}
         page={result.page}
         pageCount={result.pageCount}
+        canWrite={canWrite}
       />
     </div>
   );

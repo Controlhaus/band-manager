@@ -116,6 +116,50 @@ export async function updateSong(
   });
 }
 
+const catalogFieldsSchema = z.object({
+  songId: z.string().min(1),
+  style: z.string().trim().max(100).nullable().optional(),
+  key: z.string().trim().max(20).nullable().optional(),
+  tempoBpm: z.number().int().min(20).max(400).nullable().optional(),
+  durationSec: z.number().int().min(0).max(36000).nullable().optional(),
+  status: z
+    .enum(["IDEA", "REHEARSING", "REHEARSED", "PERFORMED", "RETIRED"])
+    .optional(),
+});
+
+/**
+ * Inline catalog edits for Style / Key / BPM / Duration / Status from the song
+ * library table. Only the provided fields are updated.
+ */
+export async function updateSongCatalogFields(
+  input: z.infer<typeof catalogFieldsSchema>,
+): Promise<ActionResult> {
+  return runAction(async () => {
+    const user = await requireUser();
+    const data = catalogFieldsSchema.parse(input);
+    const actId = await actIdForSong(data.songId);
+    if (!actId) return { ok: false, error: "Song not found." };
+    await requireCapability(user, actId, "song:write");
+
+    await prisma.song.update({
+      where: { id: data.songId },
+      data: {
+        ...(data.style !== undefined ? { style: data.style || null } : {}),
+        ...(data.key !== undefined ? { key: data.key || null } : {}),
+        ...(data.tempoBpm !== undefined ? { tempoBpm: data.tempoBpm } : {}),
+        ...(data.durationSec !== undefined ? { durationSec: data.durationSec } : {}),
+        ...(data.status ? { status: data.status } : {}),
+      },
+    });
+    const slug = await slugForAct(actId);
+    if (slug) {
+      revalidatePath(`/acts/${slug}/songs`);
+      revalidatePath(`/acts/${slug}/songs/${data.songId}`);
+    }
+    return { ok: true };
+  });
+}
+
 export async function updateSongLyrics(input: {
   songId: string;
   lyrics: string;

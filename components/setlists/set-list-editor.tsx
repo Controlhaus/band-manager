@@ -19,7 +19,7 @@ import {
   arrayMove,
 } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
-import { ArrowLeft, GripVertical, MessageSquare, Music, Pencil, Plus, Trash2, X } from "lucide-react";
+import { ArrowLeft, ExternalLink, GripVertical, MessageSquare, Music, Pencil, Plus, Trash2, X } from "lucide-react";
 import {
   updateSetList,
   createSet,
@@ -31,6 +31,10 @@ import {
   updateSetEntry,
   removeSetEntry,
   reorderSetEntries,
+  addSetListLink,
+  removeSetListLink,
+  addSetLink,
+  removeSetLink,
 } from "@/app/actions/set-lists";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -43,6 +47,11 @@ import { toast } from "@/hooks/use-toast";
 import { formatDuration, parseDuration } from "@/lib/set-lists";
 import type { SetEntryKind } from "@prisma/client";
 
+export type PlaylistLinkVM = {
+  id: string;
+  url: string;
+  label: string | null;
+};
 export type SetEntryVM = {
   id: string;
   kind: SetEntryKind;
@@ -58,6 +67,7 @@ export type SetVM = {
   id: string;
   name: string;
   notes: string | null;
+  links: PlaylistLinkVM[];
   entries: SetEntryVM[];
 };
 export type CatalogSong = {
@@ -86,7 +96,7 @@ export function SetListEditor({
 }: {
   slug: string;
   canWrite: boolean;
-  setList: { id: string; name: string; notes: string | null };
+  setList: { id: string; name: string; notes: string | null; links: PlaylistLinkVM[] };
   sets: SetVM[];
   catalog: CatalogSong[];
   bookings: BookingRef[];
@@ -194,6 +204,12 @@ export function SetListEditor({
                   ))}
                 </div>
               )}
+              <PlaylistLinks
+                links={setList.links}
+                canWrite={canWrite}
+                onAdd={(url, label) => addSetListLink({ setListId: setList.id, url, label })}
+                onRemove={(linkId) => removeSetListLink({ linkId })}
+              />
             </>
           )}
         </CardHeader>
@@ -212,7 +228,115 @@ export function SetListEditor({
   );
 }
 
+function PlaylistLinks({
+  links,
+  canWrite,
+  onAdd,
+  onRemove,
+}: {
+  links: PlaylistLinkVM[];
+  canWrite: boolean;
+  onAdd: (url: string, label?: string) => Promise<{ ok: boolean; error?: string }>;
+  onRemove: (linkId: string) => Promise<{ ok: boolean; error?: string }>;
+}) {
+  const router = useRouter();
+  const [open, setOpen] = React.useState(false);
+  const [url, setUrl] = React.useState("");
+  const [label, setLabel] = React.useState("");
+  const [pending, setPending] = React.useState(false);
+
+  async function add() {
+    setPending(true);
+    const res = await onAdd(url.trim(), label.trim() || undefined);
+    setPending(false);
+    if (!res.ok) {
+      toast({ variant: "destructive", title: "Could not add link", description: res.error });
+      return;
+    }
+    setUrl("");
+    setLabel("");
+    setOpen(false);
+    router.refresh();
+  }
+
+  async function remove(linkId: string) {
+    const res = await onRemove(linkId);
+    if (!res.ok) {
+      toast({ variant: "destructive", title: "Could not remove link", description: res.error });
+      return;
+    }
+    router.refresh();
+  }
+
+  if (links.length === 0 && !canWrite) return null;
+
+  return (
+    <div className="space-y-1">
+      {links.length > 0 && (
+        <ul className="space-y-1">
+          {links.map((l) => (
+            <li key={l.id} className="flex items-center gap-2 text-sm">
+              <ExternalLink className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+              <a
+                href={l.url}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="min-w-0 flex-1 truncate hover:underline"
+              >
+                {l.label || l.url}
+              </a>
+              {canWrite && (
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="h-6 w-6"
+                  onClick={() => remove(l.id)}
+                  aria-label="Remove link"
+                >
+                  <X className="h-3.5 w-3.5" />
+                </Button>
+              )}
+            </li>
+          ))}
+        </ul>
+      )}
+      {canWrite && (
+        <Popover open={open} onOpenChange={setOpen}>
+          <PopoverTrigger asChild>
+            <Button size="sm" variant="ghost" className="h-7 px-2 text-xs text-muted-foreground">
+              <Plus className="h-3.5 w-3.5" /> Playlist link
+            </Button>
+          </PopoverTrigger>
+          <PopoverContent align="start" className="w-72 space-y-2">
+            <div className="space-y-1">
+              <Label className="text-xs">URL</Label>
+              <Input
+                autoFocus
+                value={url}
+                onChange={(e) => setUrl(e.target.value)}
+                placeholder="https://open.spotify.com/playlist/…"
+              />
+            </div>
+            <div className="space-y-1">
+              <Label className="text-xs">Label (optional)</Label>
+              <Input
+                value={label}
+                onChange={(e) => setLabel(e.target.value)}
+                placeholder="e.g. Spotify"
+              />
+            </div>
+            <Button size="sm" className="w-full" onClick={add} disabled={pending || !url.trim()}>
+              {pending ? "Adding…" : "Add link"}
+            </Button>
+          </PopoverContent>
+        </Popover>
+      )}
+    </div>
+  );
+}
+
 function SetCard({
+  slug,
   set,
   catalog,
   canWrite,
@@ -342,22 +466,32 @@ function SetCard({
             <SortableContext items={items.map((i) => i.id)} strategy={verticalListSortingStrategy}>
               <ol className="space-y-1">
                 {items.map((it, index) => (
-                  <SortableEntry key={it.id} item={it} index={index} canWrite={canWrite} />
+                  <SortableEntry key={it.id} slug={slug} item={it} index={index} canWrite={canWrite} />
                 ))}
               </ol>
             </SortableContext>
           </DndContext>
         )}
+        <div className="mt-3">
+          <PlaylistLinks
+            links={set.links}
+            canWrite={canWrite}
+            onAdd={(url, label) => addSetLink({ setId: set.id, url, label })}
+            onRemove={(linkId) => removeSetLink({ linkId })}
+          />
+        </div>
       </CardContent>
     </Card>
   );
 }
 
 function SortableEntry({
+  slug,
   item,
   index,
   canWrite,
 }: {
+  slug: string;
   item: SetEntryVM;
   index: number;
   canWrite: boolean;
@@ -416,7 +550,18 @@ function SortableEntry({
           <Music className="h-4 w-4 shrink-0 text-muted-foreground" />
         )}
         <div className="min-w-0 flex-1 truncate">
-          {label}
+          {item.kind === "SONG" && item.songId ? (
+            <Link
+              href={`/acts/${slug}/songs/${item.songId}`}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="hover:underline"
+            >
+              {label}
+            </Link>
+          ) : (
+            label
+          )}
           {item.kind === "SONG" && item.artist && (
             <span className="text-muted-foreground"> — {item.artist}</span>
           )}

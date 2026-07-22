@@ -191,6 +191,106 @@ export async function duplicateSetList(input: {
   });
 }
 
+// ---- Playlist links ----
+
+const linkFields = {
+  url: z.string().trim().url("Enter a valid URL.").max(2000),
+  label: z.string().trim().max(120).optional(),
+};
+
+export async function addSetListLink(input: {
+  setListId: string;
+  url: string;
+  label?: string;
+}): Promise<ActionResult> {
+  return runAction(async () => {
+    const user = await requireUser();
+    const { setListId, url, label } = z
+      .object({ setListId: z.string().min(1), ...linkFields })
+      .parse(input);
+    const ctx = await ctxForList(setListId);
+    if (!ctx) return { ok: false, error: "Set list not found." };
+    await requireCapability(user, ctx.actId, "setlist:write");
+
+    const count = await prisma.setListLink.count({ where: { setListId } });
+    await prisma.setListLink.create({
+      data: { setListId, url, label: label || null, sortOrder: count + 1 },
+    });
+    revalidateList(ctx.act.slug, setListId);
+    return { ok: true };
+  });
+}
+
+export async function removeSetListLink(input: {
+  linkId: string;
+}): Promise<ActionResult> {
+  return runAction(async () => {
+    const user = await requireUser();
+    const { linkId } = z.object({ linkId: z.string().min(1) }).parse(input);
+    const link = await prisma.setListLink.findUnique({
+      where: { id: linkId },
+      select: {
+        setListId: true,
+        setList: { select: { actId: true, act: { select: { slug: true } } } },
+      },
+    });
+    if (!link) return { ok: false, error: "Link not found." };
+    await requireCapability(user, link.setList.actId, "setlist:write");
+    await prisma.setListLink.delete({ where: { id: linkId } });
+    revalidateList(link.setList.act.slug, link.setListId);
+    return { ok: true };
+  });
+}
+
+export async function addSetLink(input: {
+  setId: string;
+  url: string;
+  label?: string;
+}): Promise<ActionResult> {
+  return runAction(async () => {
+    const user = await requireUser();
+    const { setId, url, label } = z
+      .object({ setId: z.string().min(1), ...linkFields })
+      .parse(input);
+    const ctx = await ctxForSet(setId);
+    if (!ctx) return { ok: false, error: "Set not found." };
+    await requireCapability(user, ctx.setList.actId, "setlist:write");
+
+    const count = await prisma.setLink.count({ where: { setId } });
+    await prisma.setLink.create({
+      data: { setId, url, label: label || null, sortOrder: count + 1 },
+    });
+    revalidateList(ctx.setList.act.slug, ctx.setListId);
+    return { ok: true };
+  });
+}
+
+export async function removeSetLink(input: {
+  linkId: string;
+}): Promise<ActionResult> {
+  return runAction(async () => {
+    const user = await requireUser();
+    const { linkId } = z.object({ linkId: z.string().min(1) }).parse(input);
+    const link = await prisma.setLink.findUnique({
+      where: { id: linkId },
+      select: {
+        setId: true,
+        set: {
+          select: {
+            setListId: true,
+            setList: { select: { actId: true, act: { select: { slug: true } } } },
+          },
+        },
+      },
+    });
+    if (!link) return { ok: false, error: "Link not found." };
+    await requireCapability(user, link.set.setList.actId, "setlist:write");
+    await prisma.setLink.delete({ where: { id: linkId } });
+    revalidateList(link.set.setList.act.slug, link.set.setListId);
+    return { ok: true };
+  });
+}
+
 // ---- Sets ----
 
 export async function createSet(input: {

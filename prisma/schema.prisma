@@ -604,9 +604,26 @@ model SetList {
 
   sets     SetListSet[]
   bookings BookingGroup[]
+  links    SetListLink[]
 
   @@index([actId])
   @@map("set_list")
+}
+
+// Playlist links attached to a whole set list (e.g. a Spotify/YouTube
+// playlist). Multiple allowed; ordered by sortOrder.
+model SetListLink {
+  id        String   @id @default(cuid())
+  setListId String
+  setList   SetList  @relation(fields: [setListId], references: [id], onDelete: Cascade)
+  url       String
+  label     String?
+  sortOrder Int      @default(0)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([setListId])
+  @@map("set_list_link")
 }
 
 model SetListSet {
@@ -620,9 +637,26 @@ model SetListSet {
   updatedAt DateTime @updatedAt
 
   entries SetEntry[]
+  links   SetLink[]
 
   @@index([setListId])
   @@map("set_list_set")
+}
+
+// Playlist links attached to a single set within a set list. Multiple
+// allowed; ordered by sortOrder.
+model SetLink {
+  id        String     @id @default(cuid())
+  setId     String
+  set       SetListSet @relation(fields: [setId], references: [id], onDelete: Cascade)
+  url       String
+  label     String?
+  sortOrder Int        @default(0)
+  createdAt DateTime   @default(now())
+  updatedAt DateTime   @updatedAt
+
+  @@index([setId])
+  @@map("set_link")
 }
 
 model SetEntry {
