@@ -354,6 +354,48 @@ export async function addSetSong(input: {
   });
 }
 
+/**
+ * Add every song in an album to a set, ordered by track number (falling back
+ * to title). Songs are matched by their `album` field within the act.
+ */
+export async function addSetAlbum(input: {
+  setId: string;
+  album: string;
+}): Promise<ActionResult> {
+  return runAction(async () => {
+    const user = await requireUser();
+    const { setId, album } = z
+      .object({
+        setId: z.string().min(1),
+        album: z.string().trim().min(1).max(200),
+      })
+      .parse(input);
+    const ctx = await ctxForSet(setId);
+    if (!ctx) return { ok: false, error: "Set not found." };
+    const actId = ctx.setList.actId;
+    await requireCapability(user, actId, "setlist:write");
+
+    const songs = await prisma.song.findMany({
+      where: { actId, album, status: { not: "RETIRED" } },
+      select: { id: true },
+      orderBy: [{ trackNo: "asc" }, { title: "asc" }],
+    });
+    if (songs.length === 0) return { ok: false, error: "No songs found for this album." };
+
+    let position = await nextPosition(setId);
+    await prisma.setEntry.createMany({
+      data: songs.map((s) => ({
+        setId,
+        kind: "SONG" as const,
+        songId: s.id,
+        position: position++,
+      })),
+    });
+    revalidateList(ctx.setList.act.slug, ctx.setListId);
+    return { ok: true };
+  });
+}
+
 export async function addSetBanter(input: {
   setId: string;
   description: string;

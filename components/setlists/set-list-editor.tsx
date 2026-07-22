@@ -26,6 +26,7 @@ import {
   updateSet,
   deleteSet,
   addSetSong,
+  addSetAlbum,
   addSetBanter,
   updateSetEntry,
   removeSetEntry,
@@ -64,6 +65,7 @@ export type CatalogSong = {
   title: string;
   artist: string | null;
   durationSec: number | null;
+  album: string | null;
 };
 type BookingRef = { id: string; title: string; href: string };
 
@@ -315,6 +317,7 @@ function SetCard({
                 {canWrite && (
                   <>
                     <AddEntryPopover setId={set.id} catalog={catalog} />
+                    <AddAlbumPopover setId={set.id} catalog={catalog} />
                     <Button size="sm" variant="ghost" onClick={() => setEditing(true)}>
                       <Pencil />
                     </Button>
@@ -530,7 +533,7 @@ function AddEntryPopover({
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger asChild>
         <Button size="sm" variant="outline">
-          <Plus /> Add
+          <Plus /> Add Song
         </Button>
       </PopoverTrigger>
       <PopoverContent align="end" className="w-80 p-2">
@@ -612,6 +615,91 @@ function AddEntryPopover({
               Add banter
             </Button>
           </div>
+        )}
+      </PopoverContent>
+    </Popover>
+  );
+}
+
+function AddAlbumPopover({
+  setId,
+  catalog,
+}: {
+  setId: string;
+  catalog: CatalogSong[];
+}) {
+  const router = useRouter();
+  const [open, setOpen] = React.useState(false);
+  const [q, setQ] = React.useState("");
+  const [pending, setPending] = React.useState<string | null>(null);
+
+  const albums = React.useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const s of catalog) {
+      const album = s.album?.trim();
+      if (!album) continue;
+      counts.set(album, (counts.get(album) ?? 0) + 1);
+    }
+    return Array.from(counts.entries())
+      .map(([album, count]) => ({ album, count }))
+      .sort((a, b) => a.album.localeCompare(b.album));
+  }, [catalog]);
+
+  const trimmed = q.trim().toLowerCase();
+  const filtered = albums.filter((a) => a.album.toLowerCase().includes(trimmed));
+
+  async function addAlbum(album: string) {
+    setPending(album);
+    const res = await addSetAlbum({ setId, album });
+    setPending(null);
+    if (!res.ok) {
+      toast({ variant: "destructive", title: "Could not add album", description: res.error });
+      return;
+    }
+    setOpen(false);
+    setQ("");
+    router.refresh();
+  }
+
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>
+        <Button size="sm" variant="outline">
+          <Plus /> Add album
+        </Button>
+      </PopoverTrigger>
+      <PopoverContent align="end" className="w-80 p-2">
+        {albums.length === 0 ? (
+          <p className="p-2 text-sm text-muted-foreground">No albums in the library.</p>
+        ) : (
+          <>
+            <Input
+              autoFocus
+              placeholder="Search albums…"
+              value={q}
+              onChange={(e) => setQ(e.target.value)}
+              className="mb-2"
+            />
+            <div className="max-h-56 overflow-y-auto">
+              {filtered.map((a) => (
+                <button
+                  key={a.album}
+                  type="button"
+                  disabled={pending !== null}
+                  onClick={() => addAlbum(a.album)}
+                  className="flex w-full items-center justify-between gap-2 rounded px-2 py-1.5 text-left text-sm hover:bg-accent disabled:opacity-50"
+                >
+                  <span className="truncate">{a.album}</span>
+                  <span className="shrink-0 text-xs text-muted-foreground">
+                    {a.count} song{a.count === 1 ? "" : "s"}
+                  </span>
+                </button>
+              ))}
+              {filtered.length === 0 && (
+                <p className="p-2 text-sm text-muted-foreground">No matching albums.</p>
+              )}
+            </div>
+          </>
         )}
       </PopoverContent>
     </Popover>

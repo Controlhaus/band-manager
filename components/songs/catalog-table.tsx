@@ -17,14 +17,6 @@ import {
 import { toast } from "@/hooks/use-toast";
 import type { CatalogRow, CatalogSort } from "@/lib/song-catalog";
 
-const PLATFORM_LABEL: Record<string, string> = {
-  SPOTIFY: "Spotify",
-  YOUTUBE: "YouTube",
-  APPLE_MUSIC: "Apple",
-  SOUNDCLOUD: "SoundCloud",
-  OTHER: "Link",
-};
-
 function fmtDuration(sec: number | null): string {
   if (sec == null) return "—";
   const m = Math.floor(sec / 60);
@@ -110,7 +102,6 @@ export function CatalogTable({
               <SortHeader col="status" label="Status" />
               <SortHeader col="rehearsed" label="Rehearsed" />
               <SortHeader col="performed" label="Perf" />
-              <TableHead>Links</TableHead>
               <SortHeader col="updatedAt" label="Updated" />
             </TableRow>
           </TableHeader>
@@ -119,14 +110,6 @@ export function CatalogTable({
               <TableRow key={r.id}>
                 <TableCell className="font-medium">
                   <Link href={`/acts/${slug}/songs/${r.id}`} className="flex items-center gap-2 hover:underline">
-                    {r.coverArtUrl ? (
-                      // eslint-disable-next-line @next/next/no-img-element
-                      <img
-                        src={r.coverArtUrl}
-                        alt=""
-                        className="h-8 w-8 shrink-0 rounded object-cover"
-                      />
-                    ) : null}
                     {r.title}
                   </Link>
                 </TableCell>
@@ -162,15 +145,6 @@ export function CatalogTable({
                     {r.performedCount}
                   </button>
                 </TableCell>
-                <TableCell>
-                  <div className="flex gap-1">
-                    {r.platforms.map((p) => (
-                      <Badge key={p} variant="secondary" className="text-[10px]">
-                        {PLATFORM_LABEL[p] ?? p}
-                      </Badge>
-                    ))}
-                  </div>
-                </TableCell>
                 <TableCell className="whitespace-nowrap text-muted-foreground">
                   {new Date(r.updatedAt).toLocaleDateString()}
                 </TableCell>
@@ -178,7 +152,7 @@ export function CatalogTable({
             ))}
             {rows.length === 0 && (
               <TableRow>
-                <TableCell colSpan={13} className="text-center text-muted-foreground">
+                <TableCell colSpan={11} className="text-center text-muted-foreground">
                   No songs match.
                 </TableCell>
               </TableRow>

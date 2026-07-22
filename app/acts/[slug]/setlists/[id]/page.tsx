@@ -38,7 +38,7 @@ export default async function SetListDetailPage({
 
   const catalog = await prisma.song.findMany({
     where: { actId: act.id, status: { not: "RETIRED" } },
-    select: { id: true, title: true, artist: true, durationSec: true },
+    select: { id: true, title: true, artist: true, durationSec: true, album: true },
     orderBy: { title: "asc" },
   });
 
