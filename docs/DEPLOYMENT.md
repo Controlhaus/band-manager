@@ -218,3 +218,164 @@ volume, and restarts `app` (migrations are a no-op on a restored DB).
 | Invitations/resets don't arrive | SMTP vars; the app logs "SMTP not configured" if unset. Invites are still created and can be resent. |
 | Migration failed on deploy | `docker compose logs app`; fix the migration locally, commit, redeploy. Restore from backup if needed. |
 | Login rejected | Confirm you're using the current `ADMIN_EMAIL`; the bootstrap admin is only created when the DB has no users. |
+
+---
+
+## 11. Deploying onto the shared netcup server (Sendy + Webmin present)
+
+The netcup server already runs **Sendy** behind a web server (Apache or Nginx)
+that owns ports **80** and **443**, and **Webmin** manages the box. The default
+stack in §5 ships its own **Caddy** on 80/443, which would collide with the
+existing web server. The fix is simple: **don't run the bundled Caddy**. Instead
+run only Postgres + the app, publish the app on a localhost-only port, and let
+the server's existing web server reverse-proxy a new virtual host to it
+(terminating TLS with your existing Let's Encrypt setup).
+
+```
+Internet ──▶ existing Apache/Nginx (:443, Let's Encrypt) ─┬─▶ Sendy (PHP)
+                                                          └─▶ band.example.com ──▶ 127.0.0.1:3000 (app container)
+                                                                                        └─▶ Postgres (internal only)
+```
+
+### 11.1 DNS
+
+Add an **A record** for the app's hostname (e.g. `band.example.com`) pointing at
+the **same** server IP that already serves Sendy.
+
+### 11.2 Get the code and configure `.env`
+
+Follow §3 and §4 as written, with these notes:
+
+- `APP_URL` / `APP_DOMAIN` = your new hostname (`band.example.com`).
+- The front web server terminates TLS, so the app itself only needs to be
+  reachable on localhost. Keep everything else (secrets, SMTP, admin) the same.
+
+> **SMTP:** Sendy is a bulk-email app (typically sending via Amazon SES), **not**
+> a general SMTP relay — keep Band Manager's own `SMTP_*` settings for
+> invitations and password resets. If you already have working SMTP credentials
+> on the box, reuse those.
+
+### 11.3 Run the stack without Caddy
+
+Add an override file that publishes the app to localhost only (create it next to
+`docker-compose.yml`):
+
+```yaml
+# docker-compose.shared.yml — run behind the server's existing web server.
+services:
+  app:
+    ports:
+      - "127.0.0.1:3000:3000"   # reachable only by the local reverse proxy
+```
+
+Then bring up **only** the `db` and `app` services (never `caddy`, so ports
+80/443 stay with the existing server):
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.shared.yml up -d db app
+```
+
+> To avoid typing the file list every time, export it for your shell/session:
+> ```bash
+> export COMPOSE_FILE=docker-compose.yml:docker-compose.shared.yml
+> ```
+> Then the update path from §6 becomes `docker compose up -d db app` (again,
+> naming the services so Caddy is never started). If port `5433` is already in
+> use on the host, change the `db` mapping (or drop it — the app reaches the DB
+> over the internal network regardless).
+
+### 11.4 Add the reverse-proxy virtual host (via Webmin)
+
+Create a new virtual host for `band.example.com` that proxies to
+`http://127.0.0.1:3000`, then issue a Let's Encrypt certificate for it using your
+existing method (Virtualmin's SSL/Let's Encrypt panel, or certbot). Raise the
+upload limit to match `MAX_UPLOAD_MB` (default 25).
+
+**Apache** (enable `proxy`, `proxy_http`, `headers`, `ssl` modules):
+
+```apache
+<VirtualHost *:443>
+    ServerName band.example.com
+
+    SSLEngine on
+    # Point these at the cert your Let's Encrypt tooling issued:
+    SSLCertificateFile      /etc/letsencrypt/live/band.example.com/fullchain.pem
+    SSLCertificateKeyFile   /etc/letsencrypt/live/band.example.com/privkey.pem
+
+    ProxyPreserveHost On
+    RequestHeader set X-Forwarded-Proto "https"
+    ProxyPass        / http://127.0.0.1:3000/
+    ProxyPassReverse / http://127.0.0.1:3000/
+
+    LimitRequestBody 26214400            # ~25 MB, match MAX_UPLOAD_MB
+    Header always set Strict-Transport-Security "max-age=63072000; includeSubDomains; preload"
+    Header always set X-Content-Type-Options "nosniff"
+    Header always set Referrer-Policy "strict-origin-when-cross-origin"
+</VirtualHost>
+
+<VirtualHost *:80>
+    ServerName band.example.com
+    Redirect permanent / https://band.example.com/
+</VirtualHost>
+```
+
+**Nginx** (if the box uses Nginx instead):
+
+```nginx
+server {
+    listen 443 ssl;
+    server_name band.example.com;
+
+    ssl_certificate     /etc/letsencrypt/live/band.example.com/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/band.example.com/privkey.pem;
+
+    client_max_body_size 25m;            # match MAX_UPLOAD_MB
+    add_header Strict-Transport-Security "max-age=63072000; includeSubDomains; preload" always;
+    add_header X-Content-Type-Options "nosniff" always;
+    add_header Referrer-Policy "strict-origin-when-cross-origin" always;
+
+    location / {
+        proxy_pass         http://127.0.0.1:3000;
+        proxy_set_header   Host              $host;
+        proxy_set_header   X-Forwarded-Proto https;
+        proxy_set_header   X-Forwarded-For   $proxy_add_x_forwarded_for;
+        proxy_set_header   X-Real-IP         $remote_addr;
+    }
+}
+
+server {
+    listen 80;
+    server_name band.example.com;
+    return 301 https://band.example.com$request_uri;
+}
+```
+
+Reload the front web server after saving (Webmin has an "Apply/Restart" button;
+or `systemctl reload apache2` / `systemctl reload nginx`). Sendy's own virtual
+host is untouched — the two apps coexist on the same server, each on its own
+hostname.
+
+### 11.5 Verify
+
+```bash
+# App answers locally (behind the proxy):
+curl -fsS http://127.0.0.1:3000/api/health          # {"status":"ok"}
+# End-to-end through the front proxy + TLS:
+curl -fsS https://band.example.com/api/health        # {"status":"ok"}
+docker compose logs -f app                            # startup / migrations / seed
+```
+
+Then browse to `https://band.example.com` and sign in with `ADMIN_EMAIL` /
+`ADMIN_PASSWORD`.
+
+### 11.6 Notes for the shared box
+
+- **Everything else in this guide still applies** — updates (§6), backups (§7),
+  restore (§8), and routine ops (§9), just remember to name `db app` on
+  `docker compose up` (or set `COMPOSE_FILE`) so Caddy never starts.
+- **Postgres stays private:** the override binds the app to `127.0.0.1` and the
+  DB to the internal network — nothing new is exposed publicly, so no firewall
+  changes are needed beyond the 80/443 the server already allows.
+- **Certificates:** renewals are handled by your existing Let's Encrypt tooling
+  (Virtualmin/certbot), not by the app — the bundled Caddy is intentionally not
+  running here.

@@ -3,6 +3,7 @@ import { requireSession } from "@/lib/session";
 import { loadActForUser } from "@/lib/act-access";
 import { prisma } from "@/lib/prisma";
 import { can } from "@/lib/roles";
+import { songUsage } from "@/lib/set-lists-queries";
 import { SongDetail } from "@/components/songs/song-detail";
 import type { FileItem } from "@/components/files/file-list";
 
@@ -28,7 +29,7 @@ export default async function SongDetailPage({
   if (!song) notFound();
 
   const versionIds = song.versions.map((v) => v.id);
-  const [songFiles, versionFiles, status] = await Promise.all([
+  const [songFiles, versionFiles, status, usedIn] = await Promise.all([
     prisma.fileAsset.findMany({
       where: { entityType: "SONG", entityId: song.id },
       orderBy: { createdAt: "asc" },
@@ -42,6 +43,7 @@ export default async function SongDetailPage({
     prisma.userSongStatus.findUnique({
       where: { userId_songId: { userId: user.id, songId: song.id } },
     }),
+    songUsage(song.id),
   ]);
 
   const toFileItem = (f: {
@@ -71,6 +73,7 @@ export default async function SongDetailPage({
         id: song.id,
         title: song.title,
         artist: song.artist,
+        album: song.album,
         style: song.style,
         key: song.key,
         tempoBpm: song.tempoBpm,
@@ -94,6 +97,12 @@ export default async function SongDetailPage({
         files: filesByVersion.get(v.id) ?? [],
       }))}
       songFiles={songFiles.map(toFileItem)}
+      usedIn={usedIn.map((u) => ({
+        setListId: u.setListId,
+        setListName: u.setListName,
+        setName: u.setName,
+        href: `/acts/${slug}/setlists/${u.setListId}`,
+      }))}
       myStatus={{
         rehearsed: status?.rehearsed ?? false,
         performedCount: status?.performedCount ?? 0,

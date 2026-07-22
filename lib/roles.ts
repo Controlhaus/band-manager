@@ -31,6 +31,7 @@ export type Capability =
   | "entry:addNotes"
   | "attendance:setOwn"
   | "song:trackOwn"
+  | "setlist:write"
   | "booking:manage"
   | "booking:respond";
 
@@ -43,6 +44,8 @@ export const CAPABILITY_MIN_ROLE: Record<Capability, ActRole> = {
   "song:write": "MEMBER",
   "calendar:write": "MEMBER",
   "entry:addNotes": "MEMBER",
+  // Set List library (act-level, reusable) — same tier as song editing.
+  "setlist:write": "MEMBER",
   // Create/confirm/cancel bookings — Admin ✓, Member ✓, Readonly ✗ (§17.2).
   "booking:manage": "MEMBER",
   "act:edit": "ADMIN",

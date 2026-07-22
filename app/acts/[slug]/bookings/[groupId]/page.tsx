@@ -21,6 +21,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { AvailabilityControl } from "@/components/bookings/availability-control";
+import { BookingSetListSelect } from "@/components/bookings/booking-set-list-select";
 import {
   CancelBookingButton,
   ConfirmDateButton,
@@ -51,11 +52,12 @@ export default async function BookingDetailPage({
     include: {
       candidates: { orderBy: { startsAt: "asc" } },
       confirmedEntry: { select: { id: true } },
+      setList: { select: { id: true, name: true } },
     },
   });
   if (!group) notFound();
 
-  const [members, responses] = await Promise.all([
+  const [members, responses, setLists] = await Promise.all([
     prisma.actMembership.findMany({
       where: { actId: act.id },
       include: { user: { select: { id: true, name: true } } },
@@ -63,6 +65,11 @@ export default async function BookingDetailPage({
     }),
     prisma.availabilityResponse.findMany({
       where: { entryId: { in: group.candidates.map((c) => c.id) } },
+    }),
+    prisma.setList.findMany({
+      where: { actId: act.id },
+      select: { id: true, name: true },
+      orderBy: { name: "asc" },
     }),
   ]);
 
@@ -124,6 +131,23 @@ export default async function BookingDetailPage({
           </CardContent>
         </Card>
       )}
+
+      {/* Set list */}
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-base">Set list</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <BookingSetListSelect
+            slug={slug}
+            groupId={group.id}
+            currentId={group.setList?.id ?? null}
+            currentName={group.setList?.name ?? null}
+            setLists={setLists}
+            canManage={canManage}
+          />
+        </CardContent>
+      </Card>
 
       {/* Your availability */}
       {canRespond && isOpen && (

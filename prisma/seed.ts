@@ -201,6 +201,50 @@ async function seedDemo() {
     },
   });
 
+  // Reusable Set List library entry (act-level), referenced by bookings.
+  await prisma.setList.create({
+    data: {
+      actId: act.id,
+      name: "Wedding — 2 sets",
+      notes: "House standard for wedding gigs.",
+      createdById: superadmin?.id ?? null,
+      sets: {
+        create: [
+          {
+            name: "Set 1",
+            sortOrder: 1,
+            entries: {
+              create: [
+                ...songs.slice(0, 2).map((s, idx) => ({
+                  position: idx + 1,
+                  kind: "SONG" as const,
+                  songId: s.id,
+                })),
+                {
+                  position: 3,
+                  kind: "BANTER" as const,
+                  banterDescription: "Band intros",
+                  banterSeconds: 90,
+                },
+              ],
+            },
+          },
+          {
+            name: "Set 2",
+            sortOrder: 2,
+            entries: {
+              create: songs.slice(2, 4).map((s, idx) => ({
+                position: idx + 1,
+                kind: "SONG" as const,
+                songId: s.id,
+              })),
+            },
+          },
+        ],
+      },
+    },
+  });
+
   console.log("✓ demo act seeded");
 }
 

@@ -39,6 +39,12 @@ export default async function BookingsPage({
     getActEventTypes(act.id),
   ]);
 
+  const setLists = await prisma.setList.findMany({
+    where: { actId: act.id },
+    select: { id: true, name: true },
+    orderBy: { name: "asc" },
+  });
+
   const canManage = can(act.role, "booking:manage");
   const open = groups.filter((g) => g.status === "OPEN");
   const resolved = groups.filter((g) => g.status !== "OPEN");
@@ -85,6 +91,7 @@ export default async function BookingsPage({
             actId={act.id}
             slug={slug}
             eventTypes={eventTypes.map((t) => ({ id: t.id, name: t.name }))}
+            setLists={setLists}
           />
         )}
       </div>

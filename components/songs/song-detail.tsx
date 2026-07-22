@@ -1,11 +1,13 @@
 "use client";
 import * as React from "react";
 import { useRouter } from "next/navigation";
-import { Pencil, Trash2 } from "lucide-react";
+import Link from "next/link";
+import { Copy, Pencil, Trash2 } from "lucide-react";
 import {
   updateSong,
   deleteSong,
   retireSong,
+  duplicateSong,
   updateSongLyrics,
   upsertSongLink,
   deleteSongLink,
@@ -35,6 +37,7 @@ import { Markdown } from "@/components/markdown";
 import { FileUpload } from "@/components/files/file-upload";
 import { FileList, type FileItem } from "@/components/files/file-list";
 import { toast } from "@/hooks/use-toast";
+import { formatDuration, parseDuration } from "@/lib/set-lists";
 import { SONG_PLATFORMS, SONG_STATUSES } from "@/lib/types";
 import type { SongPlatform, SongStatus } from "@prisma/client";
 
@@ -42,6 +45,7 @@ type SongData = {
   id: string;
   title: string;
   artist: string | null;
+  album: string | null;
   style: string | null;
   key: string | null;
   tempoBpm: number | null;
@@ -64,6 +68,12 @@ type VersionData = {
   notes: string | null;
   files: FileItem[];
 };
+type UsedIn = {
+  setListId: string;
+  setListName: string;
+  setName: string;
+  href: string;
+};
 
 const PLATFORM_LABEL: Record<string, string> = {
   SPOTIFY: "Spotify",
@@ -80,6 +90,7 @@ export function SongDetail({
   links,
   versions,
   songFiles,
+  usedIn,
   myStatus,
 }: {
   slug: string;
@@ -88,6 +99,7 @@ export function SongDetail({
   links: LinkData[];
   versions: VersionData[];
   songFiles: FileItem[];
+  usedIn: UsedIn[];
   myStatus: { rehearsed: boolean; performedCount: number };
 }) {
   return (
@@ -119,6 +131,7 @@ export function SongDetail({
 
         <TabsContent value="info">
           <InfoSection slug={slug} canWrite={canWrite} song={song} />
+          <UsedInSection usedIn={usedIn} />
         </TabsContent>
 
         <TabsContent value="lyrics">
@@ -158,15 +171,22 @@ function InfoSection({
   async function onSubmit(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
     const f = new FormData(e.currentTarget);
+    const lengthRaw = String(f.get("length") ?? "").trim();
+    const durationSec = lengthRaw ? parseDuration(lengthRaw) : null;
+    if (lengthRaw && durationSec === null) {
+      toast({ variant: "destructive", title: "Invalid length", description: "Use mm:ss." });
+      return;
+    }
     setPending(true);
     const res = await updateSong({
       songId: song.id,
       title: String(f.get("title") ?? ""),
       artist: String(f.get("artist") ?? "") || undefined,
+      album: String(f.get("album") ?? "") || undefined,
       style: String(f.get("style") ?? "") || undefined,
       key: String(f.get("key") ?? "") || undefined,
       tempoBpm: f.get("tempoBpm") ? Number(f.get("tempoBpm")) : null,
-      durationSec: f.get("durationSec") ? Number(f.get("durationSec")) : null,
+      durationSec,
       status,
       notes: String(f.get("notes") ?? "") || undefined,
     });
@@ -177,6 +197,17 @@ function InfoSection({
     }
     toast({ title: "Saved" });
     router.refresh();
+  }
+
+  async function onDuplicate() {
+    const res = await duplicateSong({ songId: song.id });
+    if (!res.ok) {
+      toast({ variant: "destructive", title: "Could not duplicate", description: res.error });
+      return;
+    }
+    toast({ title: "Song duplicated" });
+    if (res.data?.id) router.push(`/acts/${slug}/songs/${res.data.id}`);
+    else router.refresh();
   }
 
   async function onDelete() {
@@ -205,9 +236,11 @@ function InfoSection({
       <Card>
         <CardContent className="grid gap-2 p-6 text-sm sm:grid-cols-2">
           <Detail label="Artist" value={song.artist} />
+          <Detail label="Album" value={song.album} />
           <Detail label="Style" value={song.style} />
           <Detail label="Key" value={song.key} />
           <Detail label="BPM" value={song.tempoBpm?.toString() ?? null} />
+          <Detail label="Length" value={song.durationSec ? formatDuration(song.durationSec) : null} />
           <Detail label="Status" value={song.status} />
           {song.notes && (
             <div className="sm:col-span-2">
@@ -227,10 +260,15 @@ function InfoSection({
           <div className="grid gap-4 sm:grid-cols-2">
             <Field name="title" label="Title" defaultValue={song.title} required />
             <Field name="artist" label="Artist" defaultValue={song.artist ?? ""} />
+            <Field name="album" label="Album" defaultValue={song.album ?? ""} />
             <Field name="style" label="Style" defaultValue={song.style ?? ""} />
             <Field name="key" label="Key" defaultValue={song.key ?? ""} />
             <Field name="tempoBpm" label="BPM" type="number" defaultValue={song.tempoBpm?.toString() ?? ""} />
-            <Field name="durationSec" label="Duration (sec)" type="number" defaultValue={song.durationSec?.toString() ?? ""} />
+            <Field
+              name="length"
+              label="Length (mm:ss)"
+              defaultValue={song.durationSec ? formatDuration(song.durationSec) : ""}
+            />
             <div className="space-y-2">
               <Label>Status</Label>
               <Select value={status} onValueChange={(v) => setStatus(v as SongStatus)}>
@@ -254,6 +292,9 @@ function InfoSection({
           <div className="flex flex-wrap gap-2">
             <Button type="submit" disabled={pending}>
               {pending ? "Saving…" : "Save"}
+            </Button>
+            <Button type="button" variant="outline" onClick={onDuplicate}>
+              <Copy /> Duplicate
             </Button>
             {song.status !== "RETIRED" && (
               <Button type="button" variant="outline" onClick={onRetire}>
@@ -583,5 +624,28 @@ function Detail({ label, value }: { label: string; value: string | null }) {
       <p className="text-muted-foreground">{label}</p>
       <p>{value ?? "—"}</p>
     </div>
+  );
+}
+
+function UsedInSection({ usedIn }: { usedIn: UsedIn[] }) {
+  if (usedIn.length === 0) return null;
+  return (
+    <Card className="mt-4">
+      <CardHeader>
+        <CardTitle className="text-base">Used in set lists</CardTitle>
+      </CardHeader>
+      <CardContent>
+        <ul className="space-y-1 text-sm">
+          {usedIn.map((u, i) => (
+            <li key={`${u.setListId}-${u.setName}-${i}`}>
+              <Link href={u.href} className="hover:underline">
+                {u.setListName}
+              </Link>
+              <span className="text-muted-foreground"> › {u.setName}</span>
+            </li>
+          ))}
+        </ul>
+      </CardContent>
+    </Card>
   );
 }

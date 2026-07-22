@@ -95,6 +95,13 @@ enum NotificationType {
   BOOKING_CANCELLED
 }
 
+// Set List library — a set entry is either a song reference or a "banter"
+// (spoken/interstitial) block that has no song-library reference.
+enum SetEntryKind {
+  SONG
+  BANTER
+}
+
 // ------------------------------------------------------------------
 // Auth (better-auth managed core + domain fields)
 // ------------------------------------------------------------------
@@ -126,6 +133,7 @@ model User {
   changeLogs            EntryChangeLog[]       @relation("ChangeLogBy")
   notifications         Notification[]
   calendarFeedToken     CalendarFeedToken?
+  createdSetLists       SetList[]              @relation("SetListCreatedBy")
 
   @@map("user")
 }
@@ -211,6 +219,7 @@ model Act {
   calendarEntries CalendarEntry[]
   disabledEventTypes ActDisabledEventType[]
   bookingGroups  BookingGroup[]
+  setLists       SetList[]
 
   @@map("act")
 }
@@ -258,9 +267,11 @@ model Song {
   act         Act        @relation(fields: [actId], references: [id], onDelete: Cascade)
   title       String
   artist      String?
+  album       String?
   style       String?
   key         String?
   tempoBpm    Int?
+  // Song length in seconds (surfaced as mm:ss in the UI).
   durationSec Int?
   lyrics      String?
   notes       String?
@@ -272,6 +283,7 @@ model Song {
   versions     SongVersion[]
   userStatuses UserSongStatus[]
   setlistItems SetlistItem[]
+  setEntries   SetEntry[]
 
   @@index([actId])
   @@map("song")
@@ -440,6 +452,8 @@ model BookingGroup {
   createdBy              User?         @relation("BookingCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
   confirmedEntryId       String?        @unique
   confirmedEntry         CalendarEntry? @relation("ConfirmedEntry", fields: [confirmedEntryId], references: [id], onDelete: SetNull)
+  setListId              String?
+  setList                SetList?      @relation(fields: [setListId], references: [id], onDelete: SetNull)
   deadlineReminderSentAt DateTime?
   createdAt              DateTime      @default(now())
   updatedAt              DateTime      @updatedAt
@@ -447,6 +461,7 @@ model BookingGroup {
   candidates CalendarEntry[] @relation("BookingCandidates")
 
   @@index([actId])
+  @@index([setListId])
   @@map("booking_group")
 }
 
@@ -565,6 +580,66 @@ model SetlistItem {
   @@index([setlistId])
   @@index([songId])
   @@map("setlist_item")
+}
+
+// ------------------------------------------------------------------
+// Set List library (act-level, reusable, referenced by bookings)
+// ------------------------------------------------------------------
+
+model SetList {
+  id          String   @id @default(cuid())
+  actId       String
+  act         Act      @relation(fields: [actId], references: [id], onDelete: Cascade)
+  name        String
+  notes       String?
+  createdById String?
+  createdBy   User?    @relation("SetListCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  sets     SetListSet[]
+  bookings BookingGroup[]
+
+  @@index([actId])
+  @@map("set_list")
+}
+
+model SetListSet {
+  id        String   @id @default(cuid())
+  setListId String
+  setList   SetList  @relation(fields: [setListId], references: [id], onDelete: Cascade)
+  name      String   @default("Set 1")
+  notes     String?
+  sortOrder Int      @default(0)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  entries SetEntry[]
+
+  @@index([setListId])
+  @@map("set_list_set")
+}
+
+model SetEntry {
+  id       String       @id @default(cuid())
+  setId    String
+  set      SetListSet   @relation(fields: [setId], references: [id], onDelete: Cascade)
+  position Int
+  kind     SetEntryKind @default(SONG)
+  // Song entries reference the library; Restrict blocks hard-deleting a song
+  // still used in a set. Null for banter entries.
+  songId   String?
+  song     Song?        @relation(fields: [songId], references: [id], onDelete: Restrict)
+  // Banter-only fields (kind = BANTER).
+  banterDescription String?
+  banterSeconds     Int?
+  notes    String?
+  createdAt DateTime    @default(now())
+  updatedAt DateTime    @updatedAt
+
+  @@index([setId])
+  @@index([songId])
+  @@map("set_entry")
 }
 
 // ------------------------------------------------------------------

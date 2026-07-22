@@ -64,10 +64,12 @@ export function NewBookingDialog({
   actId,
   slug,
   eventTypes,
+  setLists,
 }: {
   actId: string;
   slug: string;
   eventTypes: EventType[];
+  setLists: { id: string; name: string }[];
 }) {
   const router = useRouter();
   const [open, setOpen] = React.useState(false);
@@ -77,6 +79,7 @@ export function NewBookingDialog({
   const [customerContact, setCustomerContact] = React.useState("");
   const [venueNotes, setVenueNotes] = React.useState("");
   const [responseDeadline, setResponseDeadline] = React.useState("");
+  const [setListId, setSetListId] = React.useState("");
   const [candidates, setCandidates] = React.useState<Candidate[]>([emptyCandidate("")]);
 
   function patch(i: number, p: Partial<Candidate>) {
@@ -92,6 +95,7 @@ export function NewBookingDialog({
       customerContact: customerContact || undefined,
       venueNotes: venueNotes || undefined,
       responseDeadline: responseDeadline || undefined,
+      setListId: setListId || undefined,
       candidates: candidates.map((c) => ({
         kind: c.kind,
         eventTypeId: c.kind === "EVENT" ? c.eventTypeId || null : null,
@@ -152,6 +156,28 @@ export function NewBookingDialog({
             <Label htmlFor="b-deadline">Response deadline (optional)</Label>
             <Input id="b-deadline" type="datetime-local" value={responseDeadline} onChange={(e) => setResponseDeadline(e.target.value)} />
           </div>
+
+          {setLists.length > 0 && (
+            <div className="space-y-2">
+              <Label>Set list (optional)</Label>
+              <Select
+                value={setListId || "none"}
+                onValueChange={(v) => setSetListId(v === "none" ? "" : v)}
+              >
+                <SelectTrigger>
+                  <SelectValue placeholder="None" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="none">None</SelectItem>
+                  {setLists.map((sl) => (
+                    <SelectItem key={sl.id} value={sl.id}>
+                      {sl.name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+          )}
 
           <div className="space-y-3">
             <div className="flex items-center justify-between">

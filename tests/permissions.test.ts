@@ -67,6 +67,18 @@ describe("requireActRole / requireCapability", () => {
     await expect(requireCapability(normal, ACT, "song:write")).resolves.toBe("MEMBER");
   });
 
+  it("rejects a READONLY user from editing set lists", async () => {
+    findUnique.mockResolvedValue({ role: "READONLY" });
+    await expect(
+      requireCapability(normal, ACT, "setlist:write"),
+    ).rejects.toBeInstanceOf(AuthorizationError);
+  });
+
+  it("allows a MEMBER to edit set lists", async () => {
+    findUnique.mockResolvedValue({ role: "MEMBER" });
+    await expect(requireCapability(normal, ACT, "setlist:write")).resolves.toBe("MEMBER");
+  });
+
   it("allows a READONLY user to set their own attendance", async () => {
     findUnique.mockResolvedValue({ role: "READONLY" });
     await expect(

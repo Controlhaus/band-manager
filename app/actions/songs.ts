@@ -36,6 +36,7 @@ async function slugForAct(actId: string): Promise<string | null> {
 const songFields = {
   title: z.string().trim().min(1, "Title is required.").max(200),
   artist: z.string().trim().max(200).optional(),
+  album: z.string().trim().max(200).optional(),
   style: z.string().trim().max(100).optional(),
   key: z.string().trim().max(20).optional(),
   tempoBpm: z.number().int().min(20).max(400).optional().nullable(),
@@ -61,6 +62,7 @@ export async function createSong(
         actId: data.actId,
         title: data.title,
         artist: data.artist || null,
+        album: data.album || null,
         style: data.style || null,
         key: data.key || null,
         tempoBpm: data.tempoBpm ?? null,
@@ -93,6 +95,7 @@ export async function updateSong(
       data: {
         title: data.title,
         artist: data.artist || null,
+        album: data.album || null,
         style: data.style || null,
         key: data.key || null,
         tempoBpm: data.tempoBpm ?? null,
@@ -190,6 +193,71 @@ export async function deleteSong(input: {
     const slug = await slugForAct(actId);
     if (slug) revalidatePath(`/acts/${slug}/songs`);
     return { ok: true };
+  });
+}
+
+/** Full copy of a song (fields, versions, links) with a "Copy of " title. */
+export async function duplicateSong(input: {
+  songId: string;
+}): Promise<ActionResult<{ id: string }>> {
+  return runAction(async () => {
+    const user = await requireUser();
+    const { songId } = z.object({ songId: z.string().min(1) }).parse(input);
+    const actId = await actIdForSong(songId);
+    if (!actId) return { ok: false, error: "Song not found." };
+    await requireCapability(user, actId, "song:write");
+
+    const src = await prisma.song.findUnique({
+      where: { id: songId },
+      include: { versions: true, links: true },
+    });
+    if (!src) return { ok: false, error: "Song not found." };
+
+    const created = await prisma.$transaction(async (tx) => {
+      const song = await tx.song.create({
+        data: {
+          actId: src.actId,
+          title: `Copy of ${src.title}`,
+          artist: src.artist,
+          album: src.album,
+          style: src.style,
+          key: src.key,
+          tempoBpm: src.tempoBpm,
+          durationSec: src.durationSec,
+          lyrics: src.lyrics,
+          notes: src.notes,
+          status: src.status,
+        },
+        select: { id: true },
+      });
+
+      // Copy versions, tracking old → new ids so version-scoped links remap.
+      const versionIdMap = new Map<string, string>();
+      for (const v of src.versions) {
+        const nv = await tx.songVersion.create({
+          data: { songId: song.id, name: v.name, key: v.key, notes: v.notes },
+          select: { id: true },
+        });
+        versionIdMap.set(v.id, nv.id);
+      }
+
+      for (const l of src.links) {
+        await tx.songLink.create({
+          data: {
+            songId: song.id,
+            versionId: l.versionId ? versionIdMap.get(l.versionId) ?? null : null,
+            platform: l.platform,
+            url: l.url,
+            label: l.label,
+          },
+        });
+      }
+      return song;
+    });
+
+    const slug = await slugForAct(actId);
+    if (slug) revalidatePath(`/acts/${slug}/songs`);
+    return { ok: true, data: { id: created.id } };
   });
 }
 

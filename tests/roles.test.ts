@@ -18,6 +18,7 @@ const EXPECTED: Record<Capability, Record<ActRole, boolean>> = {
   "song:write": { READONLY: false, MEMBER: true, ADMIN: true },
   "calendar:write": { READONLY: false, MEMBER: true, ADMIN: true },
   "entry:addNotes": { READONLY: false, MEMBER: true, ADMIN: true },
+  "setlist:write": { READONLY: false, MEMBER: true, ADMIN: true },
   "act:edit": { READONLY: false, MEMBER: false, ADMIN: true },
   "act:manageMembers": { READONLY: false, MEMBER: false, ADMIN: true },
   "booking:manage": { READONLY: false, MEMBER: true, ADMIN: true },

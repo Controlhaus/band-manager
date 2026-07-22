@@ -15,6 +15,7 @@ import {
   DialogTrigger,
 } from "@/components/ui/dialog";
 import { toast } from "@/hooks/use-toast";
+import { parseDuration } from "@/lib/set-lists";
 
 export function CreateSongDialog({
   actId,
@@ -31,14 +32,22 @@ export function CreateSongDialog({
     e.preventDefault();
     const form = new FormData(e.currentTarget);
     const tempo = form.get("tempoBpm");
+    const lengthRaw = String(form.get("length") ?? "").trim();
+    const durationSec = lengthRaw ? parseDuration(lengthRaw) : null;
+    if (lengthRaw && durationSec === null) {
+      toast({ variant: "destructive", title: "Invalid length", description: "Use mm:ss." });
+      return;
+    }
     setPending(true);
     const res = await createSong({
       actId,
       title: String(form.get("title") ?? ""),
       artist: String(form.get("artist") ?? "") || undefined,
+      album: String(form.get("album") ?? "") || undefined,
       style: String(form.get("style") ?? "") || undefined,
       key: String(form.get("key") ?? "") || undefined,
       tempoBpm: tempo ? Number(tempo) : undefined,
+      durationSec: durationSec ?? undefined,
     });
     setPending(false);
     if (!res.ok) {
@@ -73,6 +82,10 @@ export function CreateSongDialog({
               <Input id="artist" name="artist" />
             </div>
             <div className="space-y-2">
+              <Label htmlFor="album">Album</Label>
+              <Input id="album" name="album" />
+            </div>
+            <div className="space-y-2">
               <Label htmlFor="style">Style</Label>
               <Input id="style" name="style" />
             </div>
@@ -83,6 +96,10 @@ export function CreateSongDialog({
             <div className="space-y-2">
               <Label htmlFor="tempoBpm">BPM</Label>
               <Input id="tempoBpm" name="tempoBpm" type="number" min={20} max={400} />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="length">Length (mm:ss)</Label>
+              <Input id="length" name="length" placeholder="3:45" />
             </div>
           </div>
           <DialogFooter>

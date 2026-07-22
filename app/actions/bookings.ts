@@ -36,6 +36,19 @@ async function actContext(actId: string) {
   });
 }
 
+/** Validate an optional set list belongs to the act; returns the id or null. */
+async function resolveSetListId(
+  actId: string,
+  setListId: string | null | undefined,
+): Promise<string | null> {
+  if (!setListId) return null;
+  const sl = await prisma.setList.findFirst({
+    where: { id: setListId, actId },
+    select: { id: true },
+  });
+  return sl?.id ?? null;
+}
+
 async function validateEventTypeFor(
   actId: string,
   kind: "REHEARSAL" | "EVENT",
@@ -115,6 +128,7 @@ const createSchema = z.object({
   customerContact: z.string().trim().max(200).optional(),
   venueNotes: z.string().trim().max(2000).optional(),
   responseDeadline: z.string().optional(),
+  setListId: z.string().min(1).optional().nullable(),
   candidates: z.array(entryFieldsSchema).min(1, "Add at least one candidate date."),
 });
 
@@ -140,6 +154,8 @@ export async function createBookingGroup(
       ? zonedInputToUtc(data.responseDeadline, act.timezone)
       : null;
 
+    const setListId = await resolveSetListId(act.id, data.setListId);
+
     const group = await prisma.$transaction(async (tx) => {
       const g = await tx.bookingGroup.create({
         data: {
@@ -149,6 +165,7 @@ export async function createBookingGroup(
           customerContact: data.customerContact || null,
           venueNotes: data.venueNotes || null,
           responseDeadline: deadline,
+          setListId,
           createdById: user.id,
         },
         select: { id: true, title: true },
@@ -177,6 +194,7 @@ const metaSchema = z.object({
   customerContact: z.string().trim().max(200).optional(),
   venueNotes: z.string().trim().max(2000).optional(),
   responseDeadline: z.string().optional(),
+  setListId: z.string().min(1).optional().nullable(),
 });
 
 export async function updateBookingGroup(
@@ -192,6 +210,8 @@ export async function updateBookingGroup(
     if (!group) return { ok: false, error: "Booking not found." };
     await requireCapability(user, group.actId, "booking:manage");
 
+    const setListId = await resolveSetListId(group.actId, data.setListId);
+
     await prisma.bookingGroup.update({
       where: { id: group.id },
       data: {
@@ -199,10 +219,37 @@ export async function updateBookingGroup(
         customerName: data.customerName || null,
         customerContact: data.customerContact || null,
         venueNotes: data.venueNotes || null,
+        setListId,
         responseDeadline: data.responseDeadline
           ? zonedInputToUtc(data.responseDeadline, group.act.timezone)
           : null,
       },
+    });
+    revalidatePath(`/acts/${group.act.slug}/bookings/${group.id}`);
+    return { ok: true };
+  });
+}
+
+export async function setBookingSetList(input: {
+  groupId: string;
+  setListId: string | null;
+}): Promise<ActionResult> {
+  return runAction(async () => {
+    const user = await requireUser();
+    const { groupId, setListId } = z
+      .object({ groupId: z.string().min(1), setListId: z.string().min(1).nullable() })
+      .parse(input);
+    const group = await prisma.bookingGroup.findUnique({
+      where: { id: groupId },
+      include: { act: { select: { slug: true } } },
+    });
+    if (!group) return { ok: false, error: "Booking not found." };
+    await requireCapability(user, group.actId, "booking:manage");
+
+    const resolved = await resolveSetListId(group.actId, setListId);
+    await prisma.bookingGroup.update({
+      where: { id: group.id },
+      data: { setListId: resolved },
     });
     revalidatePath(`/acts/${group.act.slug}/bookings/${group.id}`);
     return { ok: true };

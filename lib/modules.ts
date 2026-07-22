@@ -3,6 +3,7 @@ import {
   CalendarDays,
   ClipboardList,
   LayoutDashboard,
+  ListMusic,
   Music,
   Users,
 } from "lucide-react";
@@ -27,6 +28,7 @@ export type ModuleNavItem = {
 export const actModules: ModuleNavItem[] = [
   { key: "dashboard", label: "Dashboard", path: "", icon: LayoutDashboard, minRole: "READONLY" },
   { key: "songs", label: "Songs", path: "/songs", icon: Music, minRole: "READONLY" },
+  { key: "setlists", label: "Set Lists", path: "/setlists", icon: ListMusic, minRole: "READONLY" },
   { key: "calendar", label: "Calendar", path: "/calendar", icon: CalendarDays, minRole: "READONLY" },
   { key: "bookings", label: "Bookings", path: "/bookings", icon: ClipboardList, minRole: "READONLY" },
   { key: "members", label: "Members", path: "/members", icon: Users, minRole: "READONLY" },
