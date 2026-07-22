@@ -74,6 +74,7 @@ export default async function SongDetailPage({
         title: song.title,
         artist: song.artist,
         album: song.album,
+        trackNo: song.trackNo,
         style: song.style,
         key: song.key,
         tempoBpm: song.tempoBpm,

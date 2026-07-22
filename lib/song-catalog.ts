@@ -13,6 +13,8 @@ export const CATALOG_PAGE_SIZE = 50;
 export type CatalogSort =
   | "title"
   | "artist"
+  | "album"
+  | "trackNo"
   | "style"
   | "key"
   | "tempoBpm"
@@ -26,6 +28,8 @@ export type CatalogSort =
 const SORT_SQL: Record<CatalogSort, string> = {
   title: "s.title",
   artist: "s.artist",
+  album: "s.album",
+  trackNo: 's."trackNo"',
   style: "s.style",
   key: 's."key"',
   tempoBpm: 's."tempoBpm"',
@@ -44,6 +48,8 @@ export type CatalogRow = {
   id: string;
   title: string;
   artist: string | null;
+  album: string | null;
+  trackNo: number | null;
   style: string | null;
   key: string | null;
   tempoBpm: number | null;
@@ -97,7 +103,7 @@ export async function queryCatalog(q: CatalogQuery): Promise<CatalogResult> {
   const rows = await prisma.$queryRaw<
     Omit<CatalogRow, "platforms">[]
   >(Prisma.sql`
-    SELECT s.id, s.title, s.artist, s.style, s."key",
+    SELECT s.id, s.title, s.artist, s.album, s."trackNo", s.style, s."key",
            s."tempoBpm", s."durationSec", s.status::text AS status, s."updatedAt",
            COALESCE(us.rehearsed, false) AS rehearsed,
            COALESCE(us."performedCount", 0)::int AS "performedCount"

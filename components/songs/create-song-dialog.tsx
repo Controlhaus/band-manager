@@ -32,6 +32,7 @@ export function CreateSongDialog({
     e.preventDefault();
     const form = new FormData(e.currentTarget);
     const tempo = form.get("tempoBpm");
+    const trackNoRaw = form.get("trackNo");
     const lengthRaw = String(form.get("length") ?? "").trim();
     const durationSec = lengthRaw ? parseDuration(lengthRaw) : null;
     if (lengthRaw && durationSec === null) {
@@ -44,6 +45,7 @@ export function CreateSongDialog({
       title: String(form.get("title") ?? ""),
       artist: String(form.get("artist") ?? "") || undefined,
       album: String(form.get("album") ?? "") || undefined,
+      trackNo: trackNoRaw ? Number(trackNoRaw) : undefined,
       style: String(form.get("style") ?? "") || undefined,
       key: String(form.get("key") ?? "") || undefined,
       tempoBpm: tempo ? Number(tempo) : undefined,
@@ -84,6 +86,10 @@ export function CreateSongDialog({
             <div className="space-y-2">
               <Label htmlFor="album">Album</Label>
               <Input id="album" name="album" />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="trackNo">Track #</Label>
+              <Input id="trackNo" name="trackNo" type="number" min={1} max={999} />
             </div>
             <div className="space-y-2">
               <Label htmlFor="style">Style</Label>

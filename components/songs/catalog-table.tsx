@@ -101,6 +101,8 @@ export function CatalogTable({
             <TableRow>
               <SortHeader col="title" label="Title" />
               <SortHeader col="artist" label="Artist" />
+              <SortHeader col="album" label="Album" />
+              <SortHeader col="trackNo" label="Track" />
               <SortHeader col="style" label="Style" />
               <SortHeader col="key" label="Key" />
               <SortHeader col="tempoBpm" label="BPM" />
@@ -121,6 +123,8 @@ export function CatalogTable({
                   </Link>
                 </TableCell>
                 <TableCell className="text-muted-foreground">{r.artist ?? "—"}</TableCell>
+                <TableCell className="text-muted-foreground">{r.album ?? "—"}</TableCell>
+                <TableCell className="tabular-nums">{r.trackNo ?? "—"}</TableCell>
                 <TableCell>{r.style ?? "—"}</TableCell>
                 <TableCell>{r.key ?? "—"}</TableCell>
                 <TableCell>{r.tempoBpm ?? "—"}</TableCell>
@@ -166,7 +170,7 @@ export function CatalogTable({
             ))}
             {rows.length === 0 && (
               <TableRow>
-                <TableCell colSpan={11} className="text-center text-muted-foreground">
+                <TableCell colSpan={13} className="text-center text-muted-foreground">
                   No songs match.
                 </TableCell>
               </TableRow>

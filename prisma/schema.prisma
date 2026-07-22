@@ -268,6 +268,8 @@ model Song {
   title       String
   artist      String?
   album       String?
+  // Track number within the album (1-based). Optional.
+  trackNo     Int?
   style       String?
   key         String?
   tempoBpm    Int?

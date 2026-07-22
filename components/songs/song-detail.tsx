@@ -46,6 +46,7 @@ type SongData = {
   title: string;
   artist: string | null;
   album: string | null;
+  trackNo: number | null;
   style: string | null;
   key: string | null;
   tempoBpm: number | null;
@@ -183,6 +184,7 @@ function InfoSection({
       title: String(f.get("title") ?? ""),
       artist: String(f.get("artist") ?? "") || undefined,
       album: String(f.get("album") ?? "") || undefined,
+      trackNo: f.get("trackNo") ? Number(f.get("trackNo")) : null,
       style: String(f.get("style") ?? "") || undefined,
       key: String(f.get("key") ?? "") || undefined,
       tempoBpm: f.get("tempoBpm") ? Number(f.get("tempoBpm")) : null,
@@ -237,6 +239,7 @@ function InfoSection({
         <CardContent className="grid gap-2 p-6 text-sm sm:grid-cols-2">
           <Detail label="Artist" value={song.artist} />
           <Detail label="Album" value={song.album} />
+          <Detail label="Track #" value={song.trackNo?.toString() ?? null} />
           <Detail label="Style" value={song.style} />
           <Detail label="Key" value={song.key} />
           <Detail label="BPM" value={song.tempoBpm?.toString() ?? null} />
@@ -261,6 +264,7 @@ function InfoSection({
             <Field name="title" label="Title" defaultValue={song.title} required />
             <Field name="artist" label="Artist" defaultValue={song.artist ?? ""} />
             <Field name="album" label="Album" defaultValue={song.album ?? ""} />
+            <Field name="trackNo" label="Track #" type="number" defaultValue={song.trackNo?.toString() ?? ""} />
             <Field name="style" label="Style" defaultValue={song.style ?? ""} />
             <Field name="key" label="Key" defaultValue={song.key ?? ""} />
             <Field name="tempoBpm" label="BPM" type="number" defaultValue={song.tempoBpm?.toString() ?? ""} />
