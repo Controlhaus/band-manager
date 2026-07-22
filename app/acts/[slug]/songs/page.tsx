@@ -10,6 +10,7 @@ import {
 import { CatalogFilters } from "@/components/songs/catalog-filters";
 import { CatalogTable } from "@/components/songs/catalog-table";
 import { CreateSongDialog } from "@/components/songs/create-song-dialog";
+import { ImportAlbumDialog } from "@/components/songs/import-album-dialog";
 
 export const dynamic = "force-dynamic";
 
@@ -51,7 +52,12 @@ export default async function SongsPage({
           <h1 className="text-2xl font-bold tracking-tight">Songs</h1>
           <p className="text-muted-foreground">{result.total} in the catalog</p>
         </div>
-        {canWrite && <CreateSongDialog actId={act.id} slug={slug} />}
+        {canWrite && (
+          <div className="flex items-center gap-2">
+            <ImportAlbumDialog actId={act.id} />
+            <CreateSongDialog actId={act.id} slug={slug} />
+          </div>
+        )}
       </div>
 
       <CatalogFilters

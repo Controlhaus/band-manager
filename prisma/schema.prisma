@@ -277,6 +277,9 @@ model Song {
   durationSec Int?
   lyrics      String?
   notes       String?
+  // Album cover art URL (self-origin /api/cover proxy) when imported from
+  // MusicBrainz / the Cover Art Archive. Null when unknown.
+  coverArtUrl String?
   status      SongStatus @default(IDEA)
   createdAt   DateTime   @default(now())
   updatedAt   DateTime   @updatedAt

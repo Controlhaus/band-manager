@@ -118,7 +118,15 @@ export function CatalogTable({
             {rows.map((r) => (
               <TableRow key={r.id}>
                 <TableCell className="font-medium">
-                  <Link href={`/acts/${slug}/songs/${r.id}`} className="hover:underline">
+                  <Link href={`/acts/${slug}/songs/${r.id}`} className="flex items-center gap-2 hover:underline">
+                    {r.coverArtUrl ? (
+                      // eslint-disable-next-line @next/next/no-img-element
+                      <img
+                        src={r.coverArtUrl}
+                        alt=""
+                        className="h-8 w-8 shrink-0 rounded object-cover"
+                      />
+                    ) : null}
                     {r.title}
                   </Link>
                 </TableCell>

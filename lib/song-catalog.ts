@@ -56,6 +56,7 @@ export type CatalogRow = {
   durationSec: number | null;
   status: string;
   updatedAt: Date;
+  coverArtUrl: string | null;
   rehearsed: boolean;
   performedCount: number;
   platforms: string[];
@@ -105,6 +106,7 @@ export async function queryCatalog(q: CatalogQuery): Promise<CatalogResult> {
   >(Prisma.sql`
     SELECT s.id, s.title, s.artist, s.album, s."trackNo", s.style, s."key",
            s."tempoBpm", s."durationSec", s.status::text AS status, s."updatedAt",
+           s."coverArtUrl",
            COALESCE(us.rehearsed, false) AS rehearsed,
            COALESCE(us."performedCount", 0)::int AS "performedCount"
     FROM song s

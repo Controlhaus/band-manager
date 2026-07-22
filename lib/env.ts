@@ -41,6 +41,12 @@ export const env = {
   defaultTz: optional("DEFAULT_TZ", "Europe/Berlin"),
   seedDemo: optional("SEED_DEMO", "false").toLowerCase() === "true",
   enableScheduler: optional("ENABLE_SCHEDULER", "false").toLowerCase() === "true",
+  // Contact string embedded in the MusicBrainz User-Agent (their API requires
+  // a descriptive UA identifying the app + a way to reach the operator).
+  musicbrainzContact: optional("MUSICBRAINZ_CONTACT", optional("APP_URL", "http://localhost:3000")),
 } as const;
 
 export const maxUploadBytes = env.maxUploadMb * 1024 * 1024;
+
+/** User-Agent for outbound MusicBrainz / Cover Art Archive requests. */
+export const musicbrainzUserAgent = `BandManager/1.0 ( ${env.musicbrainzContact} )`;

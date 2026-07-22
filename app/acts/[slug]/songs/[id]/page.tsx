@@ -82,6 +82,7 @@ export default async function SongDetailPage({
         status: song.status,
         lyrics: song.lyrics ?? "",
         notes: song.notes ?? "",
+        coverArtUrl: song.coverArtUrl,
       }}
       links={song.links.map((l) => ({
         id: l.id,

@@ -54,6 +54,7 @@ type SongData = {
   status: SongStatus;
   lyrics: string;
   notes: string;
+  coverArtUrl: string | null;
 };
 type LinkData = {
   id: string;
@@ -106,12 +107,22 @@ export function SongDetail({
   return (
     <div className="space-y-4">
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <div>
-          <h1 className="text-2xl font-bold tracking-tight">{song.title}</h1>
-          <p className="text-muted-foreground">
-            {song.artist ?? "Unknown artist"}
-            {song.style ? ` · ${song.style}` : ""}
-          </p>
+        <div className="flex items-center gap-3">
+          {song.coverArtUrl ? (
+            // eslint-disable-next-line @next/next/no-img-element
+            <img
+              src={song.coverArtUrl}
+              alt=""
+              className="h-14 w-14 shrink-0 rounded object-cover"
+            />
+          ) : null}
+          <div>
+            <h1 className="text-2xl font-bold tracking-tight">{song.title}</h1>
+            <p className="text-muted-foreground">
+              {song.artist ?? "Unknown artist"}
+              {song.style ? ` · ${song.style}` : ""}
+            </p>
+          </div>
         </div>
         <div className="flex items-center gap-2">
           <Badge variant="outline">{song.status}</Badge>
