@@ -215,8 +215,13 @@ export async function deleteSong(input: {
     await requireCapability(user, actId, "song:write");
 
     // Block hard delete if referenced by any setlist (§14.4); offer retire.
-    const refs = await prisma.setlistItem.count({ where: { songId } });
-    if (refs > 0) {
+    // Covers both the legacy SetlistItem model and the current SetEntry model
+    // (whose songId FK is onDelete: Restrict and would otherwise 500).
+    const [legacyRefs, setEntryRefs] = await Promise.all([
+      prisma.setlistItem.count({ where: { songId } }),
+      prisma.setEntry.count({ where: { songId } }),
+    ]);
+    if (legacyRefs + setEntryRefs > 0) {
       return {
         ok: false,
         error:

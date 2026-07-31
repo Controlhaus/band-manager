@@ -25,7 +25,17 @@ export function AcceptInviteForm({
   const [pending, setPending] = React.useState(false);
 
   async function finish() {
-    const res = await acceptInvitation({ token });
+    let res;
+    try {
+      res = await acceptInvitation({ token });
+    } catch {
+      toast({
+        variant: "destructive",
+        title: "Something went wrong",
+        description: "Please refresh the page and try again.",
+      });
+      return false;
+    }
     if (!res.ok) {
       toast({ variant: "destructive", title: "Could not accept", description: res.error });
       return false;
@@ -111,7 +121,18 @@ export function AcceptInviteForm({
           return;
         }
         setPending(true);
-        const res = await acceptInvitation({ token, name, password });
+        let res;
+        try {
+          res = await acceptInvitation({ token, name, password });
+        } catch {
+          setPending(false);
+          toast({
+            variant: "destructive",
+            title: "Something went wrong",
+            description: "Please refresh the page and try again.",
+          });
+          return;
+        }
         setPending(false);
         if (!res.ok) {
           toast({ variant: "destructive", title: "Could not accept", description: res.error });
