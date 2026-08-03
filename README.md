@@ -114,6 +114,20 @@ development; the defaults are `admin@example.com` / `changeme-admin-123` with
 Postgres is only reachable on the internal Compose network (plus a
 localhost-only port mapping for host-side dev).
 
+### Updating
+
+Pull the latest code, rebuild the `app` image, and recreate the containers:
+
+```bash
+git pull
+docker compose up -d --build
+```
+
+The `app` container runs `prisma migrate deploy` on start, so any new
+migrations are applied automatically. The `db` and `caddy` images are
+unaffected and keep running. Take a backup first if you want a restore point
+(see below).
+
 ### Backups
 
 `scripts/backup.sh` dumps the database (`pg_dump`) and tars the uploads volume,

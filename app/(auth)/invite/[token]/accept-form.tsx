@@ -23,6 +23,8 @@ export function AcceptInviteForm({
 }: Props) {
   const router = useRouter();
   const [pending, setPending] = React.useState(false);
+  const [password, setPassword] = React.useState("");
+  const [confirm, setConfirm] = React.useState("");
 
   async function finish() {
     let res;
@@ -68,6 +70,7 @@ export function AcceptInviteForm({
     return (
       <form
         className="space-y-4"
+        method="post"
         onSubmit={async (e) => {
           e.preventDefault();
           const password = String(
@@ -106,12 +109,11 @@ export function AcceptInviteForm({
   return (
     <form
       className="space-y-4"
+      method="post"
       onSubmit={async (e) => {
         e.preventDefault();
         const form = new FormData(e.currentTarget);
         const name = String(form.get("name") ?? "").trim();
-        const password = String(form.get("password") ?? "");
-        const confirm = String(form.get("confirm") ?? "");
         if (password.length < 10) {
           toast({ variant: "destructive", title: "Password too short", description: "Use at least 10 characters." });
           return;
@@ -155,8 +157,18 @@ export function AcceptInviteForm({
           type="password"
           autoComplete="new-password"
           required
-          minLength={10}
+          value={password}
+          onChange={(e) => setPassword(e.target.value)}
         />
+        <p
+          className={
+            password.length > 0 && password.length < 10
+              ? "text-xs text-destructive"
+              : "text-xs text-muted-foreground"
+          }
+        >
+          At least 10 characters.
+        </p>
       </div>
       <div className="space-y-2">
         <Label htmlFor="confirm">Confirm password</Label>
@@ -166,12 +178,20 @@ export function AcceptInviteForm({
           type="password"
           autoComplete="new-password"
           required
-          minLength={10}
+          value={confirm}
+          onChange={(e) => setConfirm(e.target.value)}
         />
+        {confirm.length > 0 && confirm !== password && (
+          <p className="text-xs text-destructive">Passwords don&apos;t match.</p>
+        )}
       </div>
       <Button type="submit" className="w-full" disabled={pending}>
         {pending ? "Creating account…" : "Create account & accept"}
       </Button>
+      <p className="text-center text-xs text-muted-foreground">
+        Not responding? Open this page in Chrome or Safari instead of an
+        in-app browser.
+      </p>
     </form>
   );
 }

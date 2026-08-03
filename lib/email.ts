@@ -68,12 +68,14 @@ export async function sendInvitationEmail(
   return sendEmail({
     to,
     subject: "You've been invited to Band Manager",
-    text: `You've been invited to Band Manager. Accept your invitation: ${acceptUrl}\n\nThis link expires in 14 days.`,
+    text: `You've been invited to Band Manager. Accept your invitation: ${acceptUrl}\n\nWhen creating your account, choose a password with at least 10 characters.\n\nTip: if the button doesn't respond, open this link in your normal browser (Chrome or Safari) rather than inside your email or messaging app.\n\nThis link expires in 14 days.`,
     html: layout(
       "You've been invited to Band Manager",
       `<p>You've been invited to join Band Manager.</p>
        <p><a href="${acceptUrl}" style="display:inline-block;background:#0f172a;color:#fff;padding:10px 16px;border-radius:8px;text-decoration:none">Accept invitation</a></p>
-       <p style="color:#64748b;font-size:13px">This link expires in 14 days. If the button doesn't work, paste this URL into your browser:<br/>${acceptUrl}</p>`,
+       <p style="color:#64748b;font-size:13px">When creating your account, choose a password with at least 10 characters.</p>
+       <p style="color:#64748b;font-size:13px">If the button doesn't respond, open this link in your normal browser (Chrome or Safari) rather than inside your email or messaging app, or paste this URL into the address bar:<br/>${acceptUrl}</p>
+       <p style="color:#64748b;font-size:13px">This link expires in 14 days.</p>`,
     ),
   });
 }
