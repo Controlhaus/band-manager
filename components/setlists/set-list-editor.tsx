@@ -355,7 +355,6 @@ function PlaylistLinks({
   onAdd: (url: string, label?: string) => Promise<{ ok: boolean; error?: string }>;
   onRemove: (linkId: string) => Promise<{ ok: boolean; error?: string }>;
 }) {
-  const router = useRouter();
   const [open, setOpen] = React.useState(false);
   const [url, setUrl] = React.useState("");
   const [label, setLabel] = React.useState("");
@@ -363,25 +362,28 @@ function PlaylistLinks({
 
   async function add() {
     setPending(true);
-    const res = await onAdd(url.trim(), label.trim() || undefined);
-    setPending(false);
-    if (!res.ok) {
-      toast({ variant: "destructive", title: "Could not add link", description: res.error });
-      return;
+    try {
+      const res = await onAdd(url.trim(), label.trim() || undefined);
+      if (!res.ok) {
+        toast({ variant: "destructive", title: "Could not add link", description: res.error });
+        return;
+      }
+      // The server action revalidates the page, so the new link appears
+      // automatically — no client-side router.refresh() (which would queue
+      // behind and block a subsequent add on another set).
+      setUrl("");
+      setLabel("");
+      setOpen(false);
+    } finally {
+      setPending(false);
     }
-    setUrl("");
-    setLabel("");
-    setOpen(false);
-    router.refresh();
   }
 
   async function remove(linkId: string) {
     const res = await onRemove(linkId);
     if (!res.ok) {
       toast({ variant: "destructive", title: "Could not remove link", description: res.error });
-      return;
     }
-    router.refresh();
   }
 
   if (links.length === 0 && !canWrite) return null;
