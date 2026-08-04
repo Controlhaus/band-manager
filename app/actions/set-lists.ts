@@ -9,6 +9,7 @@ import {
   type SessionUser,
 } from "@/lib/permissions";
 import { runAction, type ActionResult } from "@/lib/action";
+import { validateAnyPlaylistUrl } from "@/lib/platform-links";
 
 async function requireUser(): Promise<SessionUser> {
   const session = await getSession();
@@ -211,6 +212,9 @@ export async function addSetListLink(input: {
     const ctx = await ctxForList(setListId);
     if (!ctx) return { ok: false, error: "Set list not found." };
     await requireCapability(user, ctx.actId, "setlist:write");
+
+    const validation = validateAnyPlaylistUrl(url);
+    if (!validation.ok) return { ok: false, error: validation.error };
 
     const count = await prisma.setListLink.count({ where: { setListId } });
     await prisma.setListLink.create({

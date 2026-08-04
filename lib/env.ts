@@ -44,6 +44,16 @@ export const env = {
   // Contact string embedded in the MusicBrainz User-Agent (their API requires
   // a descriptive UA identifying the app + a way to reach the operator).
   musicbrainzContact: optional("MUSICBRAINZ_CONTACT", optional("APP_URL", "http://localhost:3000")),
+  // §18 — song metadata resolution / import.
+  // Master switch: when false, import + resolve controls are hidden and all
+  // external adapters short-circuit (app stays fully functional, manual-only).
+  musicResolutionEnabled:
+    optional("MUSIC_RESOLUTION_ENABLED", "true").toLowerCase() === "true",
+  // iTunes Search API storefront (two-letter country code).
+  itunesStorefront: optional("ITUNES_STOREFRONT", "US"),
+  // Odesli (song.link) request country + optional API key (higher rate limit).
+  odesliCountry: optional("ODESLI_COUNTRY", "US"),
+  odesliApiKey: optional("ODESLI_API_KEY"),
 } as const;
 
 export const maxUploadBytes = env.maxUploadMb * 1024 * 1024;

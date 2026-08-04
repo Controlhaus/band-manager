@@ -19,7 +19,7 @@ import {
   arrayMove,
 } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
-import { ArrowLeft, ExternalLink, GripVertical, MessageSquare, Music, Pencil, Plus, Trash2, X } from "lucide-react";
+import { ArrowLeft, Copy, Download, ExternalLink, GripVertical, MessageSquare, Music, Pencil, Plus, Trash2, X } from "lucide-react";
 import {
   updateSetList,
   createSet,
@@ -43,6 +43,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { ImportSetDialog } from "@/components/setlists/import-set-dialog";
 import { toast } from "@/hooks/use-toast";
 import { formatDuration, parseDuration } from "@/lib/set-lists";
 import type { SetEntryKind } from "@prisma/client";
@@ -59,7 +60,11 @@ export type SetEntryVM = {
   songId: string | null;
   title: string | null;
   artist: string | null;
+  versionName: string | null;
   songDurationSec: number | null;
+  spotifyUrl: string | null;
+  youtubeUrl: string | null;
+  appleMusicUrl: string | null;
   banterDescription: string | null;
   banterSeconds: number | null;
 };
@@ -79,6 +84,45 @@ export type CatalogSong = {
 };
 type BookingRef = { id: string; title: string; href: string };
 
+// Front-end only: which streaming service the per-song open icons point at.
+export type StreamingPlatform = "SPOTIFY" | "APPLE_MUSIC" | "YOUTUBE";
+const STREAM_PREF_KEY = "setlist:streamingPlatform";
+const STREAMING_OPTIONS: { value: StreamingPlatform; label: string }[] = [
+  { value: "APPLE_MUSIC", label: "Apple Music" },
+  { value: "SPOTIFY", label: "Spotify" },
+  { value: "YOUTUBE", label: "YouTube Music" },
+];
+function streamUrlFor(e: SetEntryVM, p: StreamingPlatform): string | null {
+  if (p === "SPOTIFY") return e.spotifyUrl;
+  if (p === "APPLE_MUSIC") return e.appleMusicUrl;
+  return e.youtubeUrl;
+}
+
+function StreamingSelect({
+  value,
+  onChange,
+}: {
+  value: StreamingPlatform | null;
+  onChange: (v: StreamingPlatform | null) => void;
+}) {
+  return (
+    <select
+      value={value ?? ""}
+      onChange={(e) => onChange((e.target.value || null) as StreamingPlatform | null)}
+      className="h-9 rounded-md border border-input bg-background px-2 text-sm"
+      aria-label="Open songs in a streaming service"
+      title="Show a link to open each song in a streaming service"
+    >
+      <option value="">Open in…</option>
+      {STREAMING_OPTIONS.map((o) => (
+        <option key={o.value} value={o.value}>
+          {o.label}
+        </option>
+      ))}
+    </select>
+  );
+}
+
 function entrySeconds(e: SetEntryVM): number {
   return e.kind === "BANTER" ? e.banterSeconds ?? 0 : e.songDurationSec ?? 0;
 }
@@ -89,6 +133,8 @@ function sumSeconds(entries: SetEntryVM[]): number {
 export function SetListEditor({
   slug,
   canWrite,
+  actId,
+  musicResolutionEnabled,
   setList,
   sets,
   catalog,
@@ -96,6 +142,8 @@ export function SetListEditor({
 }: {
   slug: string;
   canWrite: boolean;
+  actId: string;
+  musicResolutionEnabled: boolean;
   setList: { id: string; name: string; notes: string | null; links: PlaylistLinkVM[] };
   sets: SetVM[];
   catalog: CatalogSong[];
@@ -106,6 +154,22 @@ export function SetListEditor({
   const [name, setName] = React.useState(setList.name);
   const [notes, setNotes] = React.useState(setList.notes ?? "");
   const [pending, setPending] = React.useState(false);
+  const [streamingPlatform, setStreamingPlatform] = React.useState<StreamingPlatform | null>(
+    null,
+  );
+
+  // Remember the last chosen service locally (never persisted to the set list).
+  React.useEffect(() => {
+    const saved = localStorage.getItem(STREAM_PREF_KEY);
+    if (saved === "SPOTIFY" || saved === "APPLE_MUSIC" || saved === "YOUTUBE") {
+      setStreamingPlatform(saved);
+    }
+  }, []);
+  function chooseStreaming(next: StreamingPlatform | null) {
+    setStreamingPlatform(next);
+    if (next) localStorage.setItem(STREAM_PREF_KEY, next);
+    else localStorage.removeItem(STREAM_PREF_KEY);
+  }
 
   const total = sets.reduce((sum, s) => sum + sumSeconds(s.entries), 0);
 
@@ -179,6 +243,7 @@ export function SetListEditor({
                   </p>
                 </div>
                 <div className="flex items-center gap-2">
+                  <StreamingSelect value={streamingPlatform} onChange={chooseStreaming} />
                   <Badge variant="outline">{formatDuration(total)}</Badge>
                   {canWrite && (
                     <Button size="sm" variant="outline" onClick={() => setEditingMeta(true)}>
@@ -210,13 +275,23 @@ export function SetListEditor({
                 onAdd={(url, label) => addSetListLink({ setListId: setList.id, url, label })}
                 onRemove={(linkId) => removeSetListLink({ linkId })}
               />
+              <SetListShareRow setListId={setList.id} sets={sets} />
             </>
           )}
         </CardHeader>
       </Card>
 
       {sets.map((s) => (
-        <SetCard key={s.id} slug={slug} set={s} catalog={catalog} canWrite={canWrite} />
+        <SetCard
+          key={s.id}
+          slug={slug}
+          set={s}
+          catalog={catalog}
+          canWrite={canWrite}
+          actId={actId}
+          musicResolutionEnabled={musicResolutionEnabled}
+          streamingPlatform={streamingPlatform}
+        />
       ))}
 
       {canWrite && (
@@ -224,6 +299,47 @@ export function SetListEditor({
           <Plus /> Add set
         </Button>
       )}
+    </div>
+  );
+}
+
+function SetListShareRow({
+  setListId,
+  sets,
+}: {
+  setListId: string;
+  sets: SetVM[];
+}) {
+  async function copyTracklist() {
+    const lines: string[] = [];
+    for (const set of sets) {
+      for (const e of set.entries) {
+        if (e.kind !== "SONG" || !e.title) continue;
+        lines.push(e.artist ? `${e.artist} - ${e.title}` : e.title);
+      }
+    }
+    try {
+      await navigator.clipboard.writeText(lines.join("\n"));
+      toast({ title: "Tracklist copied" });
+    } catch {
+      toast({ variant: "destructive", title: "Could not copy" });
+    }
+  }
+
+  const hasSongs = sets.some((s) => s.entries.some((e) => e.kind === "SONG"));
+
+  return (
+    <div className="flex flex-wrap items-center gap-2">
+      <Button size="sm" variant="outline" onClick={copyTracklist} disabled={!hasSongs}>
+        <Copy /> Copy tracklist
+      </Button>
+      {(["m3u", "csv", "txt"] as const).map((fmt) => (
+        <Button key={fmt} asChild size="sm" variant="outline">
+          <a href={`/api/set-lists/${setListId}/export?format=${fmt}`}>
+            <Download /> {fmt.toUpperCase()}
+          </a>
+        </Button>
+      ))}
     </div>
   );
 }
@@ -340,11 +456,17 @@ function SetCard({
   set,
   catalog,
   canWrite,
+  actId,
+  musicResolutionEnabled,
+  streamingPlatform,
 }: {
   slug: string;
   set: SetVM;
   catalog: CatalogSong[];
   canWrite: boolean;
+  actId: string;
+  musicResolutionEnabled: boolean;
+  streamingPlatform: StreamingPlatform | null;
 }) {
   const router = useRouter();
   const [items, setItems] = React.useState(set.entries);
@@ -442,6 +564,9 @@ function SetCard({
                   <>
                     <AddEntryPopover setId={set.id} catalog={catalog} />
                     <AddAlbumPopover setId={set.id} catalog={catalog} />
+                    {musicResolutionEnabled && (
+                      <ImportSetDialog actId={actId} setId={set.id} slug={slug} />
+                    )}
                     <Button size="sm" variant="ghost" onClick={() => setEditing(true)}>
                       <Pencil />
                     </Button>
@@ -466,7 +591,14 @@ function SetCard({
             <SortableContext items={items.map((i) => i.id)} strategy={verticalListSortingStrategy}>
               <ol className="space-y-1">
                 {items.map((it, index) => (
-                  <SortableEntry key={it.id} slug={slug} item={it} index={index} canWrite={canWrite} />
+                  <SortableEntry
+                    key={it.id}
+                    slug={slug}
+                    item={it}
+                    index={index}
+                    canWrite={canWrite}
+                    streamingPlatform={streamingPlatform}
+                  />
                 ))}
               </ol>
             </SortableContext>
@@ -490,11 +622,13 @@ function SortableEntry({
   item,
   index,
   canWrite,
+  streamingPlatform,
 }: {
   slug: string;
   item: SetEntryVM;
   index: number;
   canWrite: boolean;
+  streamingPlatform: StreamingPlatform | null;
 }) {
   const router = useRouter();
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
@@ -505,6 +639,11 @@ function SortableEntry({
   const label =
     item.kind === "BANTER" ? item.banterDescription ?? "Banter" : item.title ?? "Untitled";
   const seconds = entrySeconds(item);
+  const streamUrl =
+    streamingPlatform && item.kind === "SONG" ? streamUrlFor(item, streamingPlatform) : null;
+  const streamLabel = streamingPlatform
+    ? STREAMING_OPTIONS.find((o) => o.value === streamingPlatform)?.label ?? ""
+    : "";
 
   async function saveNote(notes: string) {
     const res = await updateSetEntry({ entryId: item.id, notes });
@@ -565,10 +704,36 @@ function SortableEntry({
           {item.kind === "SONG" && item.artist && (
             <span className="text-muted-foreground"> — {item.artist}</span>
           )}
+          {item.kind === "SONG" && item.versionName && (
+            <Badge variant="outline" className="ml-2 align-middle text-[10px]">
+              {item.versionName}
+            </Badge>
+          )}
         </div>
         <span className="text-xs tabular-nums text-muted-foreground">
           {seconds > 0 ? formatDuration(seconds) : "—"}
         </span>
+        {streamingPlatform && item.kind === "SONG" &&
+          (streamUrl ? (
+            <a
+              href={streamUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="text-muted-foreground hover:text-foreground"
+              title={`Open in ${streamLabel}`}
+              aria-label={`Open in ${streamLabel}`}
+            >
+              <ExternalLink className="h-4 w-4" />
+            </a>
+          ) : (
+            <span
+              className="text-muted-foreground/30"
+              title={`No ${streamLabel} link`}
+              aria-label={`No ${streamLabel} link`}
+            >
+              <ExternalLink className="h-4 w-4" />
+            </span>
+          ))}
         {canWrite && (
           <>
             <Button variant="ghost" size="sm" onClick={() => setEditingNote((v) => !v)}>

@@ -1,8 +1,10 @@
 import { notFound } from "next/navigation";
+import type { SongPlatform } from "@prisma/client";
 import { requireSession } from "@/lib/session";
 import { loadActForUser } from "@/lib/act-access";
 import { prisma } from "@/lib/prisma";
 import { can } from "@/lib/roles";
+import { env } from "@/lib/env";
 import { SetListEditor, type SetVM } from "@/components/setlists/set-list-editor";
 
 export const dynamic = "force-dynamic";
@@ -26,7 +28,16 @@ export default async function SetListDetailPage({
           entries: {
             orderBy: { position: "asc" },
             include: {
-              song: { select: { id: true, title: true, artist: true, durationSec: true } },
+              song: {
+                select: {
+                  id: true,
+                  title: true,
+                  artist: true,
+                  durationSec: true,
+                  links: { select: { platform: true, url: true, versionId: true } },
+                },
+              },
+              songVersion: { select: { name: true } },
             },
           },
           links: { orderBy: { sortOrder: "asc" } },
@@ -46,6 +57,19 @@ export default async function SetListDetailPage({
 
   const canWrite = can(act.role, "setlist:write");
 
+  // Version-specific links win over song-level ones (mirrors the export route).
+  const pickLink = (
+    links: { platform: SongPlatform; url: string; versionId: string | null }[],
+    versionId: string | null,
+    platform: SongPlatform,
+  ): string | null => {
+    if (versionId) {
+      const v = links.find((l) => l.versionId === versionId && l.platform === platform);
+      if (v) return v.url;
+    }
+    return links.find((l) => l.versionId === null && l.platform === platform)?.url ?? null;
+  };
+
   const sets: SetVM[] = setList.sets.map((s) => ({
     id: s.id,
     name: s.name,
@@ -58,7 +82,11 @@ export default async function SetListDetailPage({
       songId: e.songId,
       title: e.song?.title ?? null,
       artist: e.song?.artist ?? null,
+      versionName: e.songVersion?.name ?? null,
       songDurationSec: e.song?.durationSec ?? null,
+      spotifyUrl: e.song ? pickLink(e.song.links, e.songVersionId, "SPOTIFY") : null,
+      youtubeUrl: e.song ? pickLink(e.song.links, e.songVersionId, "YOUTUBE") : null,
+      appleMusicUrl: e.song ? pickLink(e.song.links, e.songVersionId, "APPLE_MUSIC") : null,
       banterDescription: e.banterDescription,
       banterSeconds: e.banterSeconds,
     })),
@@ -68,6 +96,8 @@ export default async function SetListDetailPage({
     <SetListEditor
       slug={slug}
       canWrite={canWrite}
+      actId={act.id}
+      musicResolutionEnabled={env.musicResolutionEnabled}
       setList={{
         id: setList.id,
         name: setList.name,

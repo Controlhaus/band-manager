@@ -47,6 +47,66 @@ enum SongPlatform {
   APPLE_MUSIC
   SOUNDCLOUD
   OTHER
+  // §18.3 — added for multi-platform resolution.
+  TIDAL
+  DEEZER
+  AMAZON_MUSIC
+  SONGLINK
+}
+
+// §18 — song metadata resolution, enrichment & import.
+enum SongResolutionStatus {
+  UNRESOLVED
+  RESOLVED
+  MANUAL
+  FAILED
+}
+
+enum SongLinkSource {
+  MANUAL
+  ITUNES
+  ODESLI
+}
+
+enum ImportSessionStatus {
+  DRAFT
+  RESOLVING
+  REVIEW
+  COMMITTED
+  ABANDONED
+}
+
+enum ImportLineAction {
+  CREATE
+  LINK_EXISTING
+  SKIP
+  MANUAL
+  NEW_VERSION
+}
+
+enum ImportLineState {
+  PENDING
+  RESOLVED
+  NO_MATCH
+  ERROR
+}
+
+enum EnrichmentKind {
+  ODESLI
+  MUSICBRAINZ
+}
+
+enum EnrichmentState {
+  QUEUED
+  RUNNING
+  DONE
+  FAILED
+}
+
+enum ExternalProvider {
+  ITUNES
+  ODESLI
+  MUSICBRAINZ
 }
 
 enum CalendarKind {
@@ -117,16 +177,16 @@ model User {
   createdAt     DateTime   @default(now())
   updatedAt     DateTime   @updatedAt
 
-  profile          UserProfile?
-  memberships      ActMembership[]
-  sessions         Session[]
-  accounts         Account[]
-  songStatuses     UserSongStatus[]
-  attendances      Attendance[]
-  createdActs      Act[]            @relation("ActCreatedBy")
-  createdEntries   CalendarEntry[]  @relation("EntryCreatedBy")
-  uploadedFiles    FileAsset[]      @relation("FileUploadedBy")
-  sentInvitations  Invitation[]     @relation("InvitedBy")
+  profile               UserProfile?
+  memberships           ActMembership[]
+  sessions              Session[]
+  accounts              Account[]
+  songStatuses          UserSongStatus[]
+  attendances           Attendance[]
+  createdActs           Act[]                  @relation("ActCreatedBy")
+  createdEntries        CalendarEntry[]        @relation("EntryCreatedBy")
+  uploadedFiles         FileAsset[]            @relation("FileUploadedBy")
+  sentInvitations       Invitation[]           @relation("InvitedBy")
   createdBookings       BookingGroup[]         @relation("BookingCreatedBy")
   availabilityResponses AvailabilityResponse[]
   acknowledgements      EntryAcknowledgement[]
@@ -134,6 +194,8 @@ model User {
   notifications         Notification[]
   calendarFeedToken     CalendarFeedToken?
   createdSetLists       SetList[]              @relation("SetListCreatedBy")
+  createdImportSessions SongImportSession[]    @relation("ImportCreatedBy")
+  createdSetlistLinks   SetlistLink[]          @relation("SetlistLinkCreatedBy")
 
   @@map("user")
 }
@@ -213,13 +275,14 @@ model Act {
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
-  memberships    ActMembership[]
-  songs          Song[]
-  eventTypes     EventType[]
-  calendarEntries CalendarEntry[]
+  memberships        ActMembership[]
+  songs              Song[]
+  eventTypes         EventType[]
+  calendarEntries    CalendarEntry[]
   disabledEventTypes ActDisabledEventType[]
-  bookingGroups  BookingGroup[]
-  setLists       SetList[]
+  bookingGroups      BookingGroup[]
+  setLists           SetList[]
+  songImportSessions SongImportSession[]
 
   @@map("act")
 }
@@ -262,50 +325,74 @@ model Invitation {
 // ------------------------------------------------------------------
 
 model Song {
-  id          String     @id @default(cuid())
-  actId       String
-  act         Act        @relation(fields: [actId], references: [id], onDelete: Cascade)
-  title       String
-  artist      String?
-  album       String?
+  id                String               @id @default(cuid())
+  actId             String
+  act               Act                  @relation(fields: [actId], references: [id], onDelete: Cascade)
+  title             String
+  artist            String?
+  album             String?
   // Track number within the album (1-based). Optional.
-  trackNo     Int?
-  style       String?
-  key         String?
-  tempoBpm    Int?
+  trackNo           Int?
+  style             String?
+  key               String?
+  tempoBpm          Int?
   // Song length in seconds (surfaced as mm:ss in the UI).
-  durationSec Int?
-  lyrics      String?
-  notes       String?
+  durationSec       Int?
+  lyrics            String?
+  notes             String?
   // Album cover art URL (self-origin /api/cover proxy) when imported from
   // MusicBrainz / the Cover Art Archive. Null when unknown.
-  coverArtUrl String?
-  status      SongStatus @default(IDEA)
-  createdAt   DateTime   @default(now())
-  updatedAt   DateTime   @updatedAt
+  coverArtUrl       String?
+  status            SongStatus           @default(IDEA)
+  // §18.3 — external recording resolution. album (above) holds iTunes
+  // collectionName; artworkUrl/previewUrl are Apple-hosted hotlinks (never
+  // proxied or cached to disk, distinct from coverArtUrl above).
+  appleTrackId      String?
+  appleCollectionId String?
+  isrc              String?
+  releaseDate       DateTime?
+  artworkUrl        String?
+  previewUrl        String?
+  mbRecordingId     String?
+  mbWorkId          String?
+  writers           String[]             @default([])
+  resolutionStatus  SongResolutionStatus @default(UNRESOLVED)
+  resolvedAt        DateTime?
+  createdAt         DateTime             @default(now())
+  updatedAt         DateTime             @updatedAt
 
-  links        SongLink[]
-  versions     SongVersion[]
-  userStatuses UserSongStatus[]
-  setlistItems SetlistItem[]
-  setEntries   SetEntry[]
+  links          SongLink[]
+  versions       SongVersion[]
+  userStatuses   UserSongStatus[]
+  setlistItems   SetlistItem[]
+  setEntries     SetEntry[]
+  enrichmentJobs EnrichmentJob[]
+  importLines    SongImportLine[]
 
   @@index([actId])
+  @@index([actId, appleTrackId])
+  @@index([actId, isrc])
   @@map("song")
 }
 
 model SongLink {
-  id        String       @id @default(cuid())
+  id        String         @id @default(cuid())
   songId    String
-  song      Song         @relation(fields: [songId], references: [id], onDelete: Cascade)
+  song      Song           @relation(fields: [songId], references: [id], onDelete: Cascade)
   versionId String?
-  version   SongVersion? @relation(fields: [versionId], references: [id], onDelete: SetNull)
+  version   SongVersion?   @relation(fields: [versionId], references: [id], onDelete: SetNull)
   platform  SongPlatform
   url       String
   label     String?
-  createdAt DateTime     @default(now())
-  updatedAt DateTime     @updatedAt
+  // §18.3 — MANUAL rows are user-added and never touched by enrichment;
+  // ITUNES/ODESLI rows are replaced on re-resolve.
+  source    SongLinkSource @default(MANUAL)
+  createdAt DateTime       @default(now())
+  updatedAt DateTime       @updatedAt
 
+  // NOTE: versionId NULL means song-level; Postgres treats NULLs as distinct
+  // in unique indexes, so song-level dedupe is enforced in code, not here.
+  @@unique([songId, versionId, platform, source])
   @@index([songId])
   @@map("song_link")
 }
@@ -322,6 +409,7 @@ model SongVersion {
 
   links        SongLink[]
   setlistItems SetlistItem[]
+  setEntries   SetEntry[]
 
   @@index([songId])
   @@map("song_version")
@@ -400,12 +488,12 @@ model AttendanceStatus {
 // ------------------------------------------------------------------
 
 model CalendarEntry {
-  id              String       @id @default(cuid())
+  id              String        @id @default(cuid())
   actId           String
-  act             Act          @relation(fields: [actId], references: [id], onDelete: Cascade)
+  act             Act           @relation(fields: [actId], references: [id], onDelete: Cascade)
   kind            CalendarKind
   eventTypeId     String?
-  eventType       EventType?   @relation(fields: [eventTypeId], references: [id], onDelete: Restrict)
+  eventType       EventType?    @relation(fields: [eventTypeId], references: [id], onDelete: Restrict)
   title           String
   // All datetimes stored UTC (§14.1). startsAt required.
   startsAt        DateTime
@@ -417,21 +505,21 @@ model CalendarEntry {
   downbeatAt      DateTime?
   loadOutAt       DateTime?
   notes           String?
-  status          EntryStatus  @default(CONFIRMED)
-  version         Int          @default(1)
+  status          EntryStatus   @default(CONFIRMED)
+  version         Int           @default(1)
   bookingGroupId  String?
   bookingGroup    BookingGroup? @relation("BookingCandidates", fields: [bookingGroupId], references: [id], onDelete: SetNull)
   createdById     String?
-  createdBy       User?        @relation("EntryCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
-  createdAt       DateTime     @default(now())
-  updatedAt       DateTime     @updatedAt
+  createdBy       User?         @relation("EntryCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
 
-  attendances Attendance[]
-  setlists    Setlist[]
+  attendances           Attendance[]
+  setlists              Setlist[]
   availabilityResponses AvailabilityResponse[]
   acknowledgements      EntryAcknowledgement[]
   changeLogs            EntryChangeLog[]
-  confirmedForGroup     BookingGroup? @relation("ConfirmedEntry")
+  confirmedForGroup     BookingGroup?          @relation("ConfirmedEntry")
 
   @@index([actId])
   @@index([startsAt])
@@ -444,24 +532,24 @@ model CalendarEntry {
 // ------------------------------------------------------------------
 
 model BookingGroup {
-  id                     String        @id @default(cuid())
+  id                     String         @id @default(cuid())
   actId                  String
-  act                    Act           @relation(fields: [actId], references: [id], onDelete: Cascade)
+  act                    Act            @relation(fields: [actId], references: [id], onDelete: Cascade)
   title                  String
   customerName           String?
   customerContact        String?
   venueNotes             String?
   responseDeadline       DateTime?
-  status                 BookingStatus @default(OPEN)
+  status                 BookingStatus  @default(OPEN)
   createdById            String?
-  createdBy              User?         @relation("BookingCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  createdBy              User?          @relation("BookingCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
   confirmedEntryId       String?        @unique
   confirmedEntry         CalendarEntry? @relation("ConfirmedEntry", fields: [confirmedEntryId], references: [id], onDelete: SetNull)
   setListId              String?
-  setList                SetList?      @relation(fields: [setListId], references: [id], onDelete: SetNull)
+  setList                SetList?       @relation(fields: [setListId], references: [id], onDelete: SetNull)
   deadlineReminderSentAt DateTime?
-  createdAt              DateTime      @default(now())
-  updatedAt              DateTime      @updatedAt
+  createdAt              DateTime       @default(now())
+  updatedAt              DateTime       @updatedAt
 
   candidates CalendarEntry[] @relation("BookingCandidates")
 
@@ -563,6 +651,7 @@ model Setlist {
   updatedAt DateTime      @updatedAt
 
   items SetlistItem[]
+  links SetlistLink[]
 
   @@index([entryId])
   @@map("setlist")
@@ -585,6 +674,25 @@ model SetlistItem {
   @@index([setlistId])
   @@index([songId])
   @@map("setlist_item")
+}
+
+// §18.12 — manually pasted playlist URLs on a calendar-entry setlist.
+// (Distinct from SetListLink, which attaches to the reusable SetList library.)
+model SetlistLink {
+  id          String       @id @default(cuid())
+  setlistId   String
+  setlist     Setlist      @relation(fields: [setlistId], references: [id], onDelete: Cascade)
+  platform    SongPlatform
+  url         String
+  label       String?
+  createdById String?
+  createdBy   User?        @relation("SetlistLinkCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  sortOrder   Int          @default(0)
+  createdAt   DateTime     @default(now())
+  updatedAt   DateTime     @updatedAt
+
+  @@index([setlistId])
+  @@map("setlist_link")
 }
 
 // ------------------------------------------------------------------
@@ -636,8 +744,9 @@ model SetListSet {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  entries SetEntry[]
-  links   SetLink[]
+  entries        SetEntry[]
+  links          SetLink[]
+  importSessions SongImportSession[]
 
   @@index([setListId])
   @@map("set_list_set")
@@ -660,24 +769,29 @@ model SetLink {
 }
 
 model SetEntry {
-  id       String       @id @default(cuid())
-  setId    String
-  set      SetListSet   @relation(fields: [setId], references: [id], onDelete: Cascade)
-  position Int
-  kind     SetEntryKind @default(SONG)
+  id                String       @id @default(cuid())
+  setId             String
+  set               SetListSet   @relation(fields: [setId], references: [id], onDelete: Cascade)
+  position          Int
+  kind              SetEntryKind @default(SONG)
   // Song entries reference the library; Restrict blocks hard-deleting a song
   // still used in a set. Null for banter entries.
-  songId   String?
-  song     Song?        @relation(fields: [songId], references: [id], onDelete: Restrict)
+  songId            String?
+  song              Song?        @relation(fields: [songId], references: [id], onDelete: Restrict)
+  // Optional specific version of the song (e.g. a distinct recording). Null
+  // falls back to song-level data/links.
+  songVersionId     String?
+  songVersion       SongVersion? @relation(fields: [songVersionId], references: [id], onDelete: SetNull)
   // Banter-only fields (kind = BANTER).
   banterDescription String?
   banterSeconds     Int?
-  notes    String?
-  createdAt DateTime    @default(now())
-  updatedAt DateTime    @updatedAt
+  notes             String?
+  createdAt         DateTime     @default(now())
+  updatedAt         DateTime     @updatedAt
 
   @@index([setId])
   @@index([songId])
+  @@index([songVersionId])
   @@map("set_entry")
 }
 
@@ -720,4 +834,86 @@ model RateLimitBucket {
   updatedAt      DateTime @updatedAt
 
   @@map("rate_limit_bucket")
+}
+
+// ------------------------------------------------------------------
+// §18 — Song import, enrichment jobs & external lookup cache
+// ------------------------------------------------------------------
+
+model SongImportSession {
+  id          String              @id @default(cuid())
+  actId       String
+  act         Act                 @relation(fields: [actId], references: [id], onDelete: Cascade)
+  createdById String?
+  createdBy   User?               @relation("ImportCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  status      ImportSessionStatus @default(DRAFT)
+  rawInput    String
+  // When set, commit also appends the imported songs to this set (§19).
+  targetSetId String?
+  targetSet   SetListSet?         @relation(fields: [targetSetId], references: [id], onDelete: SetNull)
+  createdAt   DateTime            @default(now())
+  updatedAt   DateTime            @updatedAt
+  committedAt DateTime?
+
+  lines SongImportLine[]
+
+  @@index([actId])
+  @@index([targetSetId])
+  @@map("song_import_session")
+}
+
+model SongImportLine {
+  id                   String            @id @default(cuid())
+  sessionId            String
+  session              SongImportSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  position             Int
+  rawLine              String
+  parsedTitle          String?
+  parsedArtist         String?
+  parsedAlbumHint      String?
+  // Normalized TrackCandidate[] (max 8) so review renders without re-querying.
+  candidates           Json              @default("[]")
+  selectedCandidateIdx Int?
+  existingSongId       String?
+  existingSong         Song?             @relation(fields: [existingSongId], references: [id], onDelete: SetNull)
+  action               ImportLineAction  @default(CREATE)
+  state                ImportLineState   @default(PENDING)
+  errorMessage         String?
+  createdAt            DateTime          @default(now())
+  updatedAt            DateTime          @updatedAt
+
+  @@unique([sessionId, position])
+  @@index([sessionId])
+  @@map("song_import_line")
+}
+
+model EnrichmentJob {
+  id          String          @id @default(cuid())
+  songId      String
+  song        Song            @relation(fields: [songId], references: [id], onDelete: Cascade)
+  kind        EnrichmentKind
+  state       EnrichmentState @default(QUEUED)
+  attempts    Int             @default(0)
+  lastError   String?
+  runAfter    DateTime        @default(now())
+  createdAt   DateTime        @default(now())
+  updatedAt   DateTime        @updatedAt
+  completedAt DateTime?
+
+  @@unique([songId, kind])
+  @@index([state, runAfter])
+  @@map("enrichment_job")
+}
+
+model ExternalLookupCache {
+  id        String           @id @default(cuid())
+  provider  ExternalProvider
+  cacheKey  String
+  payload   Json
+  fetchedAt DateTime         @default(now())
+  expiresAt DateTime?
+
+  @@unique([provider, cacheKey])
+  @@index([expiresAt])
+  @@map("external_lookup_cache")
 }

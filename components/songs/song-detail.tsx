@@ -36,6 +36,11 @@ import {
 import { Markdown } from "@/components/markdown";
 import { FileUpload } from "@/components/files/file-upload";
 import { FileList, type FileItem } from "@/components/files/file-list";
+import {
+  RecordingCard,
+  type RecordingData,
+  type EnrichmentJobView,
+} from "@/components/songs/recording-card";
 import { toast } from "@/hooks/use-toast";
 import { formatDuration, parseDuration } from "@/lib/set-lists";
 import { SONG_PLATFORMS, SONG_STATUSES } from "@/lib/types";
@@ -81,6 +86,10 @@ const PLATFORM_LABEL: Record<string, string> = {
   SPOTIFY: "Spotify",
   YOUTUBE: "YouTube",
   APPLE_MUSIC: "Apple Music",
+  TIDAL: "Tidal",
+  DEEZER: "Deezer",
+  AMAZON_MUSIC: "Amazon Music",
+  SONGLINK: "Songlink",
   SOUNDCLOUD: "SoundCloud",
   OTHER: "Other",
 };
@@ -94,6 +103,9 @@ export function SongDetail({
   songFiles,
   usedIn,
   myStatus,
+  recording,
+  enrichmentJobs,
+  resolutionEnabled,
 }: {
   slug: string;
   canWrite: boolean;
@@ -103,6 +115,9 @@ export function SongDetail({
   songFiles: FileItem[];
   usedIn: UsedIn[];
   myStatus: { rehearsed: boolean; performedCount: number };
+  recording: RecordingData;
+  enrichmentJobs: EnrichmentJobView[];
+  resolutionEnabled: boolean;
 }) {
   return (
     <div className="space-y-4">
@@ -142,6 +157,15 @@ export function SongDetail({
         </TabsList>
 
         <TabsContent value="info">
+          <RecordingCard
+            songId={song.id}
+            canWrite={canWrite}
+            title={song.title}
+            artist={song.artist}
+            recording={recording}
+            enrichmentJobs={enrichmentJobs}
+            resolutionEnabled={resolutionEnabled}
+          />
           <InfoSection slug={slug} canWrite={canWrite} song={song} />
           <UsedInSection usedIn={usedIn} />
         </TabsContent>
@@ -507,7 +531,7 @@ function LinksAndFilesSection({
   files: FileItem[];
 }) {
   const router = useRouter();
-  const [platform, setPlatform] = React.useState<SongPlatform>("SPOTIFY");
+  const [platform, setPlatform] = React.useState<(typeof SONG_PLATFORMS)[number]>("SPOTIFY");
 
   async function addLink(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
@@ -566,7 +590,7 @@ function LinksAndFilesSection({
           {canWrite && (
             <form onSubmit={addLink} className="space-y-2">
               <div className="flex gap-2">
-                <Select value={platform} onValueChange={(v) => setPlatform(v as SongPlatform)}>
+                <Select value={platform} onValueChange={(v) => setPlatform(v as (typeof SONG_PLATFORMS)[number])}>
                   <SelectTrigger className="w-40">
                     <SelectValue />
                   </SelectTrigger>

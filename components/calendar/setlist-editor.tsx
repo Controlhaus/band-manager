@@ -18,7 +18,7 @@ import {
   arrayMove,
 } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
-import { GripVertical, Plus, Trash2, X } from "lucide-react";
+import { ExternalLink, GripVertical, Plus, Trash2, X } from "lucide-react";
 import {
   createSetlist,
   deleteSetlist,
@@ -27,6 +27,8 @@ import {
   removeSetlistItem,
   updateSetlistItem,
   reorderSetlistItems,
+  upsertSetlistLink,
+  deleteSetlistLink,
 } from "@/app/actions/setlists";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -43,6 +45,10 @@ import {
 } from "@/components/ui/popover";
 import { toast } from "@/hooks/use-toast";
 import { SongSheet, type SheetSong } from "./song-sheet";
+import {
+  SetlistShareBar,
+  type ShareLinkVM,
+} from "@/components/setlists/setlist-share-bar";
 
 export type SetlistItemVM = {
   id: string;
@@ -51,11 +57,13 @@ export type SetlistItemVM = {
   notes: string | null;
   title: string;
   artist: string | null;
+  links: Partial<Record<string, string>>;
 };
 export type SetlistVM = {
   id: string;
   name: string;
   items: SetlistItemVM[];
+  links: ShareLinkVM[];
 };
 export type CatalogSong = {
   id: string;
@@ -249,6 +257,16 @@ function SetlistCard({
             </SortableContext>
           </DndContext>
         )}
+        <SetlistShareBar
+          exportBasePath={`/api/setlists/${setlist.id}`}
+          tracks={items.map((it) => ({ title: it.title, artist: it.artist }))}
+          links={setlist.links}
+          canWrite={canWrite}
+          onAddLink={(platform, url) =>
+            upsertSetlistLink({ setlistId: setlist.id, platform, url })
+          }
+          onDeleteLink={(id) => deleteSetlistLink({ id })}
+        />
       </CardContent>
     </Card>
   );
@@ -312,6 +330,7 @@ function SortableRow({
           {item.title}
           {item.artist && <span className="text-muted-foreground"> — {item.artist}</span>}
         </button>
+        <ItemOpenLink links={item.links} />
         {canWrite && (
           <>
             <Button variant="ghost" size="sm" onClick={() => setEditingNote((v) => !v)}>
@@ -347,6 +366,32 @@ function SortableRow({
         </div>
       )}
     </li>
+  );
+}
+
+function ItemOpenLink({
+  links,
+}: {
+  links: Partial<Record<string, string>>;
+}) {
+  const url =
+    links.SONGLINK ??
+    links.APPLE_MUSIC ??
+    links.SPOTIFY ??
+    links.YOUTUBE ??
+    null;
+  if (!url) return null;
+  return (
+    <a
+      href={url}
+      target="_blank"
+      rel="noreferrer noopener"
+      className="text-muted-foreground hover:text-primary"
+      aria-label="Open in music service"
+      title="Open"
+    >
+      <ExternalLink className="h-4 w-4" />
+    </a>
   );
 }
 

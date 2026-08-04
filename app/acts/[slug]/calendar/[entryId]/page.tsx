@@ -30,6 +30,7 @@ import {
   type SetlistVM,
   type SongMeta,
 } from "@/components/calendar/setlist-editor";
+import type { PlaylistPlatform } from "@/lib/platform-links";
 import type { EntryInitial } from "@/components/calendar/entry-form-dialog";
 
 export const dynamic = "force-dynamic";
@@ -62,9 +63,19 @@ export default async function EntryDetailPage({
       setlists: {
         orderBy: { sortOrder: "asc" },
         include: {
+          links: { orderBy: { sortOrder: "asc" } },
           items: {
             orderBy: { position: "asc" },
-            include: { song: { select: { id: true, title: true, artist: true } } },
+            include: {
+              song: {
+                select: {
+                  id: true,
+                  title: true,
+                  artist: true,
+                  links: { select: { platform: true, url: true, versionId: true } },
+                },
+              },
+            },
           },
         },
       },
@@ -164,14 +175,31 @@ export default async function EntryDetailPage({
   const setlistVMs: SetlistVM[] = entry.setlists.map((sl) => ({
     id: sl.id,
     name: sl.name,
-    items: sl.items.map((it) => ({
-      id: it.id,
-      songId: it.songId,
-      songVersionId: it.songVersionId,
-      notes: it.notes,
-      title: it.song.title,
-      artist: it.song.artist,
+    links: sl.links.map((l) => ({
+      id: l.id,
+      platform: l.platform as PlaylistPlatform,
+      url: l.url,
+      label: l.label,
     })),
+    items: sl.items.map((it) => {
+      // Version-level link wins over song-level for the same platform.
+      const links: Partial<Record<string, string>> = {};
+      for (const l of it.song.links) {
+        if (l.versionId === null) links[l.platform] ??= l.url;
+      }
+      for (const l of it.song.links) {
+        if (l.versionId === it.songVersionId) links[l.platform] = l.url;
+      }
+      return {
+        id: it.id,
+        songId: it.songId,
+        songVersionId: it.songVersionId,
+        notes: it.notes,
+        title: it.song.title,
+        artist: it.song.artist,
+        links,
+      };
+    }),
   }));
 
   const initial: EntryInitial = {

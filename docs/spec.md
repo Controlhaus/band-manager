@@ -549,4 +549,492 @@ One `node-cron` job inside the app process (single node, per §11): every 15 min
 
 ---
 
-One design consequence to be aware of before you say go: because you chose **binding availability**, a member who answers "Available" during the poll is committed the moment someone confirms that date — there's no second chance to back out silently, which is exactly the accountability you asked for, but it means the poll UI should say so explicitly. The spec should have the availability control captioned *"Available = you're committing to play if this date is chosen"* — I'd add that one sentence to 17.2 so the agent puts it in the UI verbatim.
+# 18. Spec Addendum 5 — Song Metadata Resolution, Streaming Links & Setlist Playlist Export
+
+Extends §1–17; overrides where contradictory. **Migration note for the agent:** this is a delta on the existing app. Write new Prisma migrations; do not regenerate the schema. All existing `Song` rows migrate with new columns null and `resolutionStatus = UNRESOLVED`.
+
+## 18.0 Problem statement
+
+Today a user must hand-enter each song into the catalog (§7.3) and hand-add each streaming link (`SongLink`). The real-world workflow is: the act leader writes a setlist as plain text, builds an Apple Music playlist so everyone learns the same recording, then retypes all of it into the app. This section removes the retyping and makes "the same recording" enforceable at the data layer.
+
+**Deliberate design decision:** the app does **not** read playlists from Spotify/Apple Music/YouTube. Playlist-read APIs require paid or reviewed developer agreements (Apple Music: $99/yr Developer Program; Spotify: Extended Quota Mode review). Instead the app resolves songs individually from free, no-account APIs and emits the setlist as shareable links. Do not implement playlist URL parsing or ingestion.
+
+## 18.1 Scope
+
+**In scope:** bulk text paste → song resolution → catalog; per-song multi-platform streaming links; artwork and 30-second preview on song detail; setlist link view and file exports; manual playlist URL storage per setlist.
+
+**Non-goals for this delta (do not implement):** parsing pasted Spotify/Apple/YouTube playlist URLs; creating playlists on any platform via API; audio download or full playback; key/tempo detection (no free API exposes these — `Song.key` and `Song.tempoBpm` remain manual fields).
+
+## 18.2 External services
+
+All three require no account, no key, no signup, no fee.
+
+| Service | Base | Auth | Limit | Used for |
+|---|---|---|---|---|
+| iTunes Search API | `https://itunes.apple.com` | none | unpublished; treat as 20 req/min, honor `Retry-After` | primary resolution, Apple Music URL, artwork, preview, metadata |
+| Odesli / song.link | `https://api.song.link/v1-alpha.1` | none (optional key) | 10 req/min without a key | Spotify / YouTube / Tidal / Deezer URLs |
+| MusicBrainz | `https://musicbrainz.org/ws/2` | none; **custom `User-Agent` required** | 1 req/sec, hard | canonical recording identity, ISRC, writer credits |
+
+**iTunes sends no CORS headers.** Every call in this section is server-side only — route handlers, server actions, or the job runner. No browser `fetch` to any of these hosts.
+
+## 18.3 Data model additions
+
+```
+Song            + appleTrackId       String?  @unique-per-act (see index below)
+                + appleCollectionId  String?
+                + isrc               String?
+                + albumTitle         String?
+                + releaseDate        DateTime?
+                + artworkUrl         String?   -- Apple-hosted, hotlinked
+                + previewUrl         String?   -- Apple-hosted, streamed
+                + mbRecordingId      String?
+                + mbWorkId           String?
+                + writers            String[]  -- from MusicBrainz work relations
+                + resolutionStatus   (UNRESOLVED|RESOLVED|MANUAL|FAILED) default UNRESOLVED
+                + resolvedAt         DateTime?
+                @@index([actId, appleTrackId])
+                @@index([actId, isrc])
+
+SongLink        platform enum gains: TIDAL, DEEZER, AMAZON_MUSIC, SONGLINK
+                + source (MANUAL|ITUNES|ODESLI) default MANUAL
+                @@unique([songId, versionId, platform, source])
+                -- versionId already optional per §5; a null versionId means song-level
+
+SongImportSession  actId, createdById? (SetNull), status (DRAFT|RESOLVING|REVIEW|
+                COMMITTED|ABANDONED), rawInput Text, createdAt, committedAt?
+                -- onDelete: Cascade from Act
+
+SongImportLine  sessionId (Cascade), position Int, rawLine Text,
+                parsedTitle?, parsedArtist?, parsedAlbumHint?,
+                candidates Json,        -- normalized candidate array, see 18.9
+                selectedCandidateIdx Int?,   -- null = skipped
+                existingSongId?  (SetNull),  -- dedupe hit
+                action (CREATE|LINK_EXISTING|SKIP|MANUAL) default CREATE,
+                state (PENDING|RESOLVED|NO_MATCH|ERROR),
+                errorMessage?
+                @@unique([sessionId, position])
+
+SetlistLink     setlistId (Cascade), platform (same enum), url, label?,
+                createdById? (SetNull)
+                -- manually pasted playlist URLs; see 18.12
+
+EnrichmentJob   songId (Cascade), kind (ODESLI|MUSICBRAINZ),
+                state (QUEUED|RUNNING|DONE|FAILED),
+                attempts Int default 0, lastError?, runAfter DateTime,
+                createdAt, completedAt?
+                @@index([state, runAfter])
+                @@unique([songId, kind])   -- one live job per song per kind; re-queue = upsert
+
+ExternalLookupCache  provider (ITUNES|ODESLI|MUSICBRAINZ), cacheKey, payload Json,
+                fetchedAt, expiresAt?
+                @@unique([provider, cacheKey])
+```
+
+`SongLink.source` matters: re-running enrichment must replace `ODESLI`-sourced rows without touching rows a user added by hand.
+
+## 18.4 Outbound HTTP layer
+
+All external calls go through `lib/external/client.ts`. No adapter calls `fetch` directly.
+
+**Throttle.** Per-provider in-memory token bucket (single node per §11, single Node process — in-memory is sufficient and state loss on restart is harmless because the job queue is DB-backed): iTunes 20/min, Odesli 10/min, MusicBrainz 1/sec. Requests queue rather than fail. Every request sets `User-Agent: BandManager/1.0 ( ${APP_URL} )` — required by MusicBrainz, courteous elsewhere.
+
+**Timeouts and retries.** 10s timeout. Retry on 429/500/502/503/504 and network errors: 3 attempts, exponential backoff base 2s with jitter, honoring `Retry-After` when present. Never retry 400/401/403/404.
+
+**Cache.** Read-through `ExternalLookupCache` keyed as follows — iTunes search: `search:${normalizedQuery}:${storefront}`, TTL 30 days. iTunes lookup by id: `lookup:${trackId}`, TTL 30 days. Odesli: `url:${appleTrackUrl}:${country}`, no expiry (results are stable). MusicBrainz: `isrc:${isrc}` or `recording:${normalizedQuery}`, TTL 90 days. A daily prune line in the existing backup cron (§16.3) deletes expired rows.
+
+**Job runner.** Extend the existing `node-cron` scheduler (§17.5, gated by `ENABLE_SCHEDULER`) with a second job: every 30 seconds, claim up to 20 `EnrichmentJob` rows where `state = QUEUED AND runAfter <= now()`, ordered by `createdAt`, mark `RUNNING`, process through the throttled client, mark `DONE` or bump `attempts` with `runAfter = now() + 2^attempts minutes`. After 5 attempts, `FAILED` with `lastError`. Claiming uses `UPDATE ... WHERE state='QUEUED' ... RETURNING` so a future second instance can't double-claim. Jobs stuck in `RUNNING` for >10 minutes are reset to `QUEUED` at the start of each tick.
+
+## 18.5 iTunes Search adapter — `lib/external/itunes.ts`
+
+**Search:**
+```
+GET /search?term={encoded}&entity=song&limit=8&country={storefront}
+```
+`storefront` from `ITUNES_STOREFRONT` env (default `US`). Build `term` as `${artist} ${title}` when both parsed, else the raw line.
+
+**Lookup by id** (for re-resolve and link repair):
+```
+GET /lookup?id={trackId}&entity=song&country={storefront}
+```
+
+**Field mapping**, `results[]` → internal `TrackCandidate`:
+
+| iTunes field | Target |
+|---|---|
+| `trackName` | `title` |
+| `artistName` | `artist` |
+| `collectionName` | `albumTitle` |
+| `trackTimeMillis` | `durationSec` = `Math.round(ms / 1000)` |
+| `releaseDate` | `releaseDate` (ISO) |
+| `trackId` | `appleTrackId` (store as string) |
+| `collectionId` | `appleCollectionId` |
+| `trackViewUrl` | `SongLink{platform: APPLE_MUSIC, source: ITUNES}` |
+| `artworkUrl100` | `artworkUrl`, with `100x100` substituted to `400x400` in the path |
+| `previewUrl` | `previewUrl` |
+| `primaryGenreName` | `style` — **prefill only when the target song's `style` is empty**; never overwrite |
+| `isStreamable` | if `false`, mark the candidate with a warning badge |
+
+Discard results where `kind !== "song"`. iTunes does not return ISRC — that comes from MusicBrainz (18.7).
+
+## 18.6 Odesli adapter — `lib/external/odesli.ts`
+
+```
+GET /links?url={encodeURIComponent(appleTrackViewUrl)}&userCountry={ODESLI_COUNTRY}
+```
+
+Send `?key=` only if `ODESLI_API_KEY` is set.
+
+From `linksByPlatform`, write `SongLink` rows with `source = ODESLI` for: `spotify`, `youtube` or `youtubeMusic` (prefer `youtubeMusic`), `tidal`, `deezer`, `amazonMusic`. Also write the response's `pageUrl` as `platform: SONGLINK` — that's the universal link the setlist view uses as its default.
+
+**Shortcut:** the song.link page URL is deterministic from the Apple track id — `https://song.link/i/{appleTrackId}`. Write that row synchronously at commit time so the setlist has a working universal link immediately; the enrichment job then fills in the individual platform rows. Users must not have to wait on a queued job to get a shareable link.
+
+At 10 req/min a 40-song import takes ~4 minutes to fully enrich. That is acceptable because it is background work and results cache permanently.
+
+## 18.7 MusicBrainz adapter — `lib/external/musicbrainz.ts`
+
+**If the codebase already contains a MusicBrainz client with a rate limiter, reuse it and skip this subsection's implementation — only the field mapping below applies.** The attached spec contains no such client, so assume it must be written.
+
+Tier 1, when an ISRC is already known (it won't be on first pass — this path exists for re-resolution and manual entry):
+```
+GET /ws/2/isrc/{isrc}?inc=recordings+artist-credits&fmt=json
+```
+
+Tier 2, the normal path, using the Apple-confirmed title/artist/duration:
+```
+GET /ws/2/recording/?query=recording:"{title}" AND artist:"{artist}" AND dur:[{d-3000} TO {d+3000}]&fmt=json&limit=5
+```
+
+Accept the top hit only when MusicBrainz's own `score >= 90` and the duration is within 5 seconds. Then fetch work relations for writers:
+```
+GET /ws/2/recording/{mbid}?inc=work-rels+artist-credits&fmt=json
+```
+followed by `GET /ws/2/work/{workMbid}?inc=artist-rels&fmt=json`, taking relations of type `composer` and `lyricist` into `Song.writers`.
+
+Write `mbRecordingId`, `mbWorkId`, `writers`, and `isrc` (first ISRC on the recording, if present). **A MusicBrainz miss never fails anything** — the job completes `DONE` having written nothing. Apple metadata alone is a valid, complete song.
+
+## 18.8 Bulk paste parser — `lib/import/parse.ts`
+
+Pure function, no I/O, fully unit-testable. Input: raw multiline text. Output: `ParsedLine[]`.
+
+Per line, in order:
+1. Trim; skip empty lines and lines matching `^(set|SET)\s*\d+` or `^-{3,}$` (set separators — see the note below).
+2. Strip leading enumeration: `^\s*(\d+[.):]|[-*•])\s+`.
+3. Extract a trailing album hint: `\s*[\(\[]([^)\]]+)[\)\]]\s*$` → `parsedAlbumHint`, removed from the working string. Do **not** strip parentheticals containing `feat`, `ft.`, `remix`, `live`, `acoustic`, `reprise` — those are part of the title.
+4. Split on the first occurrence of ` - `, ` – `, ` — `, ` | `, or ` by ` (case-insensitive for `by`).
+5. If no separator: `parsedTitle` = whole string, `parsedArtist` = null.
+
+**Artist/title ordering is not decided by the parser.** `Miles Davis - So What` and `So What - Miles Davis` are both valid and indistinguishable syntactically. The resolver (18.9) queries both orderings and lets the scores decide. Do not ask the user which format they used.
+
+Set separators are detected and recorded in `SongImportLine` metadata but ignored — the standalone import targets the act catalog only. Importing directly into a set list (with version-aware duplicate handling) is specified separately in **§19**; it reuses this parser and the same review flow.
+
+## 18.9 Resolution & scoring — `lib/import/resolve.ts`
+
+For each parsed line:
+
+1. **Dedupe check first, before any network call.** Look for an existing `Song` in the same act where normalized `title` and `artist` match. Normalization: lowercase, strip diacritics (`NFD` + strip combining marks), remove punctuation, collapse whitespace, expand `&`→`and`, unify `feat.`/`ft.`/`featuring`→`feat`. On hit, set `existingSongId`, `action = LINK_EXISTING`, `state = RESOLVED`, and skip the API call entirely. The user can override to `CREATE` in review.
+2. **Query iTunes** with `${parsedArtist} ${parsedTitle}`. If a separator was found, also query the reversed ordering. Merge and dedupe candidates by `trackId`.
+3. **Score** each candidate 0–1:
+   - title similarity (Dice coefficient on bigrams of the normalized strings) × 0.45
+   - artist similarity, same method × 0.35 — scored against `parsedArtist` in whichever ordering produced this candidate
+   - album hint match, if present: 0.10 when `collectionName` normalized-contains the hint, else 0
+   - result rank bonus: `0.10 × (1 - index/8)` — iTunes returns roughly by relevance and popularity
+4. **Classify:**
+
+| Condition | `state` | Review behavior |
+|---|---|---|
+| top score ≥ 0.85 and gap to second ≥ 0.15 | `RESOLVED` | pre-selected, collapsed row |
+| top score ≥ 0.85, gap < 0.15 | `RESOLVED` | pre-selected but **expanded**, marked "similar matches" |
+| 0.55 ≤ top score < 0.85 | `RESOLVED` | not pre-selected, expanded, all candidates shown |
+| top score < 0.55, or zero results | `NO_MATCH` | manual entry row |
+| API error after retries | `ERROR` | error text, retry button |
+
+Persist the full candidate array (max 8, with all mapped fields) as `SongImportLine.candidates` so review renders without re-querying.
+
+Resolution runs as a server action invoked once per session, iterating lines through the throttled client and updating rows as it goes. At 20 req/min, a 40-line paste with both orderings queried takes ~4 minutes; the review page polls session progress every 3 seconds and renders lines as they complete. Set `SongImportSession.status = RESOLVING` during, `REVIEW` after.
+
+## 18.10 Import flow, routes and UI
+
+New route: `/acts/[slug]/songs/import`. Reachable from an "Import songs" button beside "New song" on the catalog page (§7.3), visible to ADMIN and MEMBER only.
+
+**Step 1 — Paste.** Single large textarea, placeholder showing accepted formats. Max 200 lines (reject above with a count). Submit → `createSongImportSession` → `resolveSongImportSession` → redirect to `/acts/[slug]/songs/import/[sessionId]`.
+
+**Step 2 — Review.** One row per line. Each row shows the raw input, the selected candidate (artwork thumbnail, title, artist, album, year, duration, inline preview play button), and an action select: **Add to catalog** / **Link to existing** / **Skip** / **Enter manually**. Expanding a row shows all candidates as a radio list with the same details.
+
+Version disambiguation is the point of this screen, not an afterthought. Album, release year, and duration are rendered at equal visual weight to the title, because a 4:32 live take and a 3:18 studio cut are different learning targets. The preview button is the fastest confirmation available — wire it to a single shared `<audio>` element that stops any other playing preview.
+
+"Enter manually" swaps the row for inline title/artist/album fields; the resulting song is created with `resolutionStatus = MANUAL` and no external links. Originals and obscure recordings must have a path through this screen.
+
+Footer: "Add N songs" (typed count, not a raw number — "Add 12 songs, link 3, skip 1"), and "Discard import".
+
+**Step 3 — Commit.** `commitSongImportSession` runs one transaction:
+- For each `CREATE` line: insert `Song` with mapped fields, `resolutionStatus = RESOLVED`, `status = IDEA` (per §14.11 default), plus the `APPLE_MUSIC` and deterministic `SONGLINK` rows.
+- For each `LINK_EXISTING` line: if the existing song lacks `appleTrackId`, backfill Apple fields and links from the selected candidate; otherwise no-op.
+- Enqueue `EnrichmentJob` rows (`ODESLI` and `MUSICBRAINZ`) for every created or backfilled song.
+- Set session `COMMITTED`.
+
+Then redirect to the catalog filtered to the new songs. Committing is idempotent: a session already `COMMITTED` rejects with a clear error rather than double-inserting.
+
+Sessions in `DRAFT`/`REVIEW` older than 7 days are deleted by the daily cron.
+
+## 18.11 Song detail additions (§7.3)
+
+The song detail page gains a **Recording** card above the streaming links list:
+
+- Artwork (400×400, Apple-hosted), title/artist/album/year/duration, preview player.
+- **Required beneath the preview and artwork:** an Apple Music store badge linking to `trackViewUrl`, and the text "Preview provided courtesy of iTunes". See 18.14 — this is not optional styling.
+- Writers (from MusicBrainz) when present, rendered as plain text.
+- `resolutionStatus` chip. When `UNRESOLVED` or `MANUAL`, a **"Find recording"** button opens a search dialog (same candidate UI as import review, single row) → `resolveSingleSong`. Existing hand-entered songs get retrofitted through this.
+- When `RESOLVED`: a **"Re-resolve"** button (same dialog, pre-filled) and an **"Unlink recording"** button that clears all Apple/MB fields, deletes `SongLink` rows with `source != MANUAL`, and sets `resolutionStatus = MANUAL`.
+- Enrichment state indicator when an `EnrichmentJob` for the song is `QUEUED`/`RUNNING` ("Finding links on other platforms…"), and a "Retry" affordance when `FAILED`.
+
+Manual `SongLink` add/edit/delete (§8) is unchanged and continues to work alongside resolved links. The links list groups by source with resolved links marked as such, so a user understands why deleting one might reappear after re-resolution.
+
+## 18.12 Setlist playlist output
+
+On the calendar entry detail page (§7.4), each `Setlist` gains a **Share** section.
+
+**Link view (primary).** Each setlist item renders its platform links: a single "Open" button using the `SONGLINK` universal URL by default, with a small platform-icon row (Apple / Spotify / YouTube) for direct opens. Link resolution order per item: `SongLink` matching the item's `songVersionId` → song-level `SongLink` → nothing (show a muted "no link" marker). This makes version-specific links work, which is the whole reason `SongLink.versionId` exists.
+
+Because each link points at a specific `appleTrackId`, this enforces "everyone learns the same recording" more strictly than a playlist link does — a playlist URL doesn't stop someone opening a different version in their own app.
+
+**Copy tracklist.** Button copying `Artist - Title` lines, one per item, to the clipboard. This is the input format for Soundiiz and TuneMyMusic, which do free cross-platform playlist transfer, and the README should say so in a short "Making playlists" note.
+
+**Export.** `GET /api/setlists/[id]/export?format=m3u|csv|txt`, route handler, membership-checked exactly like `/api/files/[id]` (§6):
+- `m3u` — extended M3U, `#EXTINF:{durationSec},{artist} - {title}` followed by the best available URL.
+- `csv` — position, title, artist, album, duration, key, tempo, apple_url, spotify_url, youtube_url, songlink_url, notes.
+- `txt` — plain `Artist - Title` lines.
+
+Filename `{act-slug}-{entry-date}-{setlist-name}.{ext}`, `Content-Disposition: attachment`.
+
+**Manual playlist URLs.** A "Playlist links" sub-section on each setlist lets ADMIN/MEMBER paste a URL per platform → `SetlistLink`. This is where the act leader stores the Apple Music playlist they built by hand. Displayed as prominent buttons at the top of the setlist. URL validated per platform by hostname allowlist (`music.apple.com`, `open.spotify.com`, `music.youtube.com`/`youtube.com`, `tidal.com`, `deezer.com`) — reject anything else with a specific message rather than a generic invalid-URL error.
+
+## 18.13 CSP and external assets — overrides §15.2
+
+Apple artwork and previews are hotlinked from Apple's CDN, not cached locally. Amend the CSP directives:
+
+```
+img-src 'self' blob: data: https://*.mzstatic.com;
+media-src 'self' https://audio-ssl.itunes.apple.com https://*.mzstatic.com;
+```
+
+All other directives in §15.2 stay exactly as written. In particular `connect-src 'self'` is unchanged — no browser code talks to any external API; every outbound call originates server-side. `frame-src`, `object-src`, and `script-src` are untouched: there are still no third-party embeds, no Spotify/YouTube players, and no external scripts.
+
+**Do not download or cache artwork or preview audio to disk.** Beyond the terms question in 18.14, hotlinking keeps `FileAsset` and the uploads volume clean and means artwork stays current if Apple replaces it. If an artwork URL 404s, render the existing placeholder.
+
+## 18.14 Apple attribution requirements (mandatory)
+
+Apple's iTunes Search API terms permit use of promotional content — song previews and album art — only to promote store content, and require that it appear near an approved store badge linking into the store, with attribution for previews.
+
+Concretely, the agent must implement:
+- Artwork and preview player are rendered **only** in the Recording card (18.11) and the import review rows (18.10), never as generic decoration elsewhere in the app.
+- An Apple Music badge linking to the song's `trackViewUrl` is rendered adjacent to both, in both locations.
+- The string "Preview provided courtesy of iTunes" appears adjacent to any preview player.
+- Previews are streamed from Apple's URL directly; never proxied, downloaded, or cached.
+
+README gets an "Attribution" section stating these constraints so a future contributor doesn't strip them as visual clutter. This is a requirement of the terms, not a design preference — read Apple's current terms at `performance-partners.apple.com/search-api` before altering any of it.
+
+## 18.15 Permissions additions (§4 matrix, `lib/permissions.ts`)
+
+| Capability | SUPERADMIN | Act ADMIN | MEMBER | READONLY |
+|---|---|---|---|---|
+| Run song import (create/resolve/commit sessions) | ✓ | ✓ | ✓ | – |
+| Resolve / re-resolve / unlink a song's recording | ✓ | ✓ | ✓ | – |
+| Add/edit/delete setlist playlist links | ✓ | ✓ | ✓ | – |
+| View recording data, links, previews; export setlists | ✓ | ✓ | ✓ | ✓ |
+
+Import sessions are act-scoped: every action re-derives `actId` from the session row and calls `requireActRole`. A session id from another act must 403, not 404-by-accident.
+
+## 18.16 Handler mapping additions (§8 format)
+
+| UI element | Handler | Notes |
+|---|---|---|
+| Import paste form | `createSongImportSession` | max 200 lines |
+| (automatic after create) | `resolveSongImportSession` | throttled; updates rows progressively |
+| Review page progress poll | server component read | no mutation |
+| Per-row candidate radio / action select | `updateSongImportLine` | selection + action + manual fields |
+| Row "Retry" on `ERROR` | `retrySongImportLine` | |
+| "Add N songs" button | `commitSongImportSession` | one transaction; idempotent |
+| "Discard import" button | `abandonSongImportSession` | |
+| "Find recording" / "Re-resolve" dialog | `resolveSingleSong` | search + select in one action |
+| "Unlink recording" button | `unlinkSongRecording` | clears fields, deletes non-MANUAL links |
+| Enrichment "Retry" | `requeueEnrichmentJob` | resets state to `QUEUED`, attempts to 0 |
+| Setlist playlist link add/edit/delete | `upsertSetlistLink`, `deleteSetlistLink` | hostname allowlist |
+| "Import Songs" (per set) paste form | `createSongImportSession` (with `targetSetId`) | requires `song:write` **and** `setlist:write` (§19) |
+| Per-row "New version" recording picker | `resolveImportLineCandidates`, `updateSongImportLine` | lazy candidate fetch; action `NEW_VERSION` (§19) |
+| "Copy tracklist" button | client clipboard only | no mutation |
+| Setlist export links | `GET /api/setlists/[id]/export` | route handler, membership check |
+| Preview play button | client `<audio>` only | no mutation |
+
+## 18.17 Env additions
+
+```
+ITUNES_STOREFRONT=US
+ODESLI_COUNTRY=US
+ODESLI_API_KEY=            # optional; raises the 10 req/min limit
+MUSIC_RESOLUTION_ENABLED=true
+MUSICBRAINZ_CONTACT=       # email or URL, embedded in the User-Agent
+```
+
+`MUSIC_RESOLUTION_ENABLED=false` hides the import button and the resolve/re-resolve controls and short-circuits all adapters — the app must remain fully functional with manual entry only. The existing `ENABLE_SCHEDULER` flag additionally gates the enrichment job runner.
+
+## 18.18 Failure modes
+
+| Situation | Behavior |
+|---|---|
+| iTunes returns zero results | line → `NO_MATCH`, manual entry offered; never block the import |
+| iTunes 429 / unreachable | line → `ERROR` with retry; other lines proceed |
+| Odesli 429 or down | job backs off and retries; the deterministic `song.link/i/{id}` URL is already present, so the setlist stays usable |
+| MusicBrainz miss or down | job completes `DONE` writing nothing; no user-visible failure |
+| Artwork or preview URL 404 | placeholder image; hide the preview player |
+| Whole external stack down | import surfaces "Song lookup is unavailable — you can still add songs manually" and links to the existing create form |
+
+No external failure may ever roll back a commit or leave a song half-created. Apple fields are written synchronously; everything else is best-effort enrichment.
+
+## 18.19 Testing
+
+**Vitest, unit:**
+- `lib/import/parse.ts` against a fixture of ≥40 lines covering both orderings, enumeration prefixes, album hints, preserved parentheticals (`(feat. X)`, `(Live)`), em/en dashes, titles containing dashes (`Rush - 2112 - Overture`), set separators, and empty lines.
+- Scoring function: assert correct classification band for hand-built candidate sets, including the ambiguous-gap case.
+- Normalization: diacritics, `&`/`and`, `ft.`/`feat.`.
+- `lib/permissions.ts` for the four new capabilities × four role tiers (extends the §14.10 matrix test).
+
+**Vitest, integration** with mocked HTTP (no live calls in the suite):
+- Fixtured iTunes/Odesli/MusicBrainz responses → committed songs with expected links.
+- Dedupe: importing a line matching an existing song produces `LINK_EXISTING`, not a duplicate.
+- Idempotency: committing a `COMMITTED` session rejects.
+- Direct invocation of `commitSongImportSession` and `upsertSetlistLink` as READONLY → rejected (satisfies the §13.3 pattern).
+- Throttle: 30 queued iTunes calls complete without exceeding 20 in any rolling minute (fake timers).
+
+**Playwright E2E** (mocked external hosts via route interception): paste three lines → review shows candidates → commit → songs appear in catalog with Apple links → setlist export downloads a non-empty M3U. Run once at the 390px mobile viewport per §14.12; the review rows must be usable there (stacked layout, artwork thumbnail, tap-to-expand).
+
+**Live smoke, not in CI:** a `scripts/smoke-external.ts` that hits all three real APIs once and prints results, documented in the README. These are third-party services; they will change without notice, and this script is how a maintainer checks whether a breakage is theirs or Apple's.
+
+## 18.20 Acceptance criteria (continuing from §17.7)
+
+13. A MEMBER pastes a 10-line setlist in mixed formats (`Artist - Title`, `Title - Artist`, numbered, one with an album hint); the review page resolves every line, and at least the unambiguous ones are pre-selected with artwork and a playable preview.
+14. Two candidate recordings of the same song with different albums and durations are visibly distinguishable in the review UI; selecting the live version stores that version's `appleTrackId` and duration.
+15. Committing creates the songs with working Apple Music and song.link URLs immediately; within two minutes the enrichment job has added Spotify and YouTube links and, where matched, writers from MusicBrainz.
+16. Re-importing the same list produces `LINK_EXISTING` for every line and creates zero duplicate songs.
+17. A song with no catalog match falls through to manual entry and is created with `resolutionStatus = MANUAL` and no external links.
+18. A setlist's share view shows per-song platform buttons; the M3U export downloads and opens in a desktop player; the CSV contains all resolved URLs; a pasted Apple Music playlist URL persists and renders as a button.
+19. A READONLY user can view recording data, play previews, and export a setlist, but every mutation in §18.16 is rejected server-side.
+20. Artwork and preview player each render with an Apple Music store badge adjacent and the iTunes attribution string present.
+21. With `MUSIC_RESOLUTION_ENABLED=false`, the app builds and runs, import controls are absent, and manual song creation is unaffected.
+
+## 18.21 Deferred
+
+**Spotify playlist creation.** A Spotify developer account is free — no fee, no agreement comparable to Apple's — and playlist creation needs a one-time OAuth grant from the act leader (`playlist-modify-public`), plus Extended Quota Mode if the user base exceeds 25 people. Since every song already stores its Spotify URL, the implementation is one batched `POST /v1/playlists/{id}/tracks`. Deliberately out of this delta; the schema needs no changes to accommodate it later beyond a per-act OAuth token table.
+
+**Apple Music playlist creation.** Requires paid Apple Developer Program enrollment for a MusicKit signing key. No free path exists. The `SetlistLink` manual-paste field (18.12) is the permanent answer unless that changes.
+
+**Apple Music desktop copy-paste import.** On macOS, selecting all tracks in a playlist and copying yields tab-separated text (name, artist, album, time). Feeding that into the parser at 18.8 would import an existing playlist with one keyboard shortcut and no API at all. Cheap to add later since the parser exists; verify the exact clipboard format on the target macOS version first rather than assuming it.
+
+---
+
+Two calls worth sanity-checking before handoff. **18.13** amends a spec section that §16 declared frozen — if you'd rather not touch the CSP, the alternative is proxying artwork through an authenticated route and dropping previews entirely, which costs you the fastest way to confirm you've picked the right recording. **18.8** deliberately ignores set separators in the pasted text for the catalog-only import; importing pasted songs **directly into a set list** is now specified as **§19** below (per-set target, version-aware duplicate handling) rather than bolted onto §18.
+
+---
+
+# 19. Addendum 6 — Import songs into a set list (version-aware)
+
+Extends the §18 paste-import so it can add pasted songs straight into an existing
+set (the standalone Set List library, `SetList → SetListSet → SetEntry`). The
+Songs-page import (§18.7) is unchanged. The whole §18 pipeline is reused — same
+parser (§18.8), resolver/dedupe (§18.9), review page (§18.11) and commit — with a
+nullable target and one new per-line action.
+
+## 19.1 Entry point
+
+Each set in the set-list editor gains an **"Import Songs"** button beside its
+existing **Add Song** / **Add Album** buttons (per **set**, not per set list).
+Visible to ADMIN/MEMBER only and gated by `MUSIC_RESOLUTION_ENABLED`. It opens a
+paste dialog; on submit it calls `createSongImportSession({ actId, rawInput,
+targetSetId })`, kicks off `resolveSongImportSession`, and navigates to the shared
+review page. On commit (or discard) the user is returned to the set list, not the
+catalog.
+
+## 19.2 Target & set breaks
+
+The target is a single `SetListSet`, stored as `SongImportSession.targetSetId`
+(nullable; `onDelete: SetNull`). **Set-break markers are ignored** — every imported
+song appends to the one targeted set, in paste order, after the current last
+position. (Splitting a paste across multiple sets is out of scope; the parser still
+records the markers.)
+
+## 19.3 Resolution is library-first (unchanged)
+
+Resolution still dedupes against the act catalog **before** any network call
+(§18.9 step 1): a matching library song sets `existingSongId`, `action =
+LINK_EXISTING`, and skips iTunes. iTunes is only queried for genuinely new lines —
+and, lazily, for a duplicate line only when the user opts into "New version"
+(19.4). We do **not** blanket-query the API for every pasted line.
+
+## 19.4 Duplicate handling — the `NEW_VERSION` action
+
+Because a song can have multiple `SongVersion`s ("same recording" per §18), a line
+that matches an existing library song offers a choice in review:
+
+- **Link existing** (`LINK_EXISTING`, the default): add the existing song to the
+  set, create nothing. "It's already in the library — just use it."
+- **New version** (`NEW_VERSION`, new `ImportLineAction` value): create a
+  `SongVersion` on the existing song from the selected iTunes recording, and point
+  the set entry at that version.
+
+The **"New version"** option only appears on rows that already reference a library
+song (`existingSongId` set). Selecting it lazily fetches candidates
+(`resolveImportLineCandidates` — populates candidates without changing the
+action/existing link), then the user picks a recording; the action is persisted
+only once a recording is chosen (it requires one). At commit,
+`createVersionFromCandidate` creates the version (name = the candidate's
+album/collection, fallback `"Imported version"`) and writes its **version-level**
+`SongLink` rows (Apple Music + the deterministic `song.link/i/{id}`, `versionId`
+set). Async platform enrichment (Odesli/MusicBrainz → Spotify/YouTube) is
+**song-keyed and NOT run for versions** in this delta — a new version gets Apple +
+universal links immediately; wider platform fill for versions is deferred.
+
+## 19.5 Set entries reference versions
+
+`SetEntry` gains `songVersionId String?` (`onDelete: SetNull`, indexed), mirroring
+the calendar `SetlistItem`. Commit appends one `SetEntry` per non-skipped line with
+`{ songId, songVersionId }`:
+
+| Review action | Set entry | Catalog effect |
+|---|---|---|
+| Add (`CREATE`) | new song, no version | new song + links + enrichment |
+| Manual (`MANUAL`) | new song, no version | new manual song |
+| Link existing (`LINK_EXISTING`) | existing song, no version | none (may backfill Apple fields if missing) |
+| **New version (`NEW_VERSION`)** | existing song + **new version** | new `SongVersion` + version links |
+| Skip (`SKIP`) | — | none |
+
+The set-list editor shows a small version-name badge on entries that carry one, and
+the set-list export (`GET /api/set-lists/[id]/export`) prefers a link matching the
+entry's `songVersionId`, falling back to song-level — mirroring §18.12's per-item
+resolution order.
+
+## 19.6 Permissions
+
+A targeted import creates catalog rows **and** mutates a set, so
+`createSongImportSession` with a `targetSetId` and `commitSongImportSession` of a
+targeted session require **both** `song:write` and `setlist:write`. Both are held
+by ADMIN and MEMBER; READONLY has neither and is rejected server-side. The target
+set is re-derived from the session and confirmed to belong to the session's act
+(cross-act target ⇒ error).
+
+## 19.7 Schema summary
+
+- `enum ImportLineAction` += `NEW_VERSION`.
+- `SongImportSession.targetSetId String?` → `SetListSet` (`onDelete: SetNull`).
+- `SetEntry.songVersionId String?` → `SongVersion` (`onDelete: SetNull`, indexed).
+- No new columns on `SongImportLine`; the version name is derived at commit.
+
+## 19.8 Acceptance
+
+1. A MEMBER clicks **Import Songs** on a set, pastes 10 mixed-format lines, reviews,
+   and commits; the songs appear in that set in paste order and in the catalog.
+2. A pasted line that already exists defaults to **Link existing** and adds the
+   existing song with no duplicate; switching it to **New version**, picking a
+   recording, and committing creates a `SongVersion` and the set entry uses it.
+3. The set-list export includes the version's URL for a version-backed entry.
+4. READONLY cannot import into a set (server-side 403); with
+   `MUSIC_RESOLUTION_ENABLED=false` the **Import Songs** button is absent while
+   Add Song / Add Album still work.

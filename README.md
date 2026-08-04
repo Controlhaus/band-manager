@@ -120,7 +120,7 @@ Pull the latest code, rebuild the `app` image, and recreate the containers:
 
 ```bash
 git pull
-docker compose up -d --build
+docker compose build app && docker compose up -d app
 ```
 
 The `app` container runs `prisma migrate deploy` on start, so any new

@@ -12,12 +12,14 @@ const csp = [
   "default-src 'self'",
   scriptSrc,
   "style-src 'self' 'unsafe-inline'",
-  "img-src 'self' blob: data:",
+  // §18 — Apple/iTunes artwork is hotlinked directly from mzstatic.com.
+  "img-src 'self' blob: data: https://*.mzstatic.com",
   "object-src 'self'",
   "frame-src 'self'",
   "font-src 'self'",
   "connect-src 'self'",
-  "media-src 'self'",
+  // §18 — Apple/iTunes 30s preview audio is streamed directly from Apple.
+  "media-src 'self' https://audio-ssl.itunes.apple.com https://*.mzstatic.com",
   "frame-ancestors 'none'",
   "base-uri 'self'",
   "form-action 'self'",

@@ -9,6 +9,7 @@ import {
   type SessionUser,
 } from "@/lib/permissions";
 import { runAction, type ActionResult } from "@/lib/action";
+import { validatePlaylistUrl } from "@/lib/platform-links";
 
 async function requireUser(): Promise<SessionUser> {
   const session = await getSession();
@@ -219,6 +220,92 @@ export async function reorderSetlistItems(input: {
         ),
     );
     revalidateEntry(ctx.entry.act.slug, ctx.entryId);
+    return { ok: true };
+  });
+}
+
+// ---- Playlist links (§18.12) ----
+
+const PLAYLIST_PLATFORM_ENUM = z.enum([
+  "APPLE_MUSIC",
+  "SPOTIFY",
+  "YOUTUBE",
+  "TIDAL",
+  "DEEZER",
+]);
+
+const setlistLinkSchema = z.object({
+  id: z.string().optional(),
+  setlistId: z.string().min(1),
+  platform: PLAYLIST_PLATFORM_ENUM,
+  url: z.string().trim().url("Enter a valid URL.").max(2000),
+  label: z.string().trim().max(120).optional(),
+});
+
+export async function upsertSetlistLink(
+  input: z.infer<typeof setlistLinkSchema>,
+): Promise<ActionResult> {
+  return runAction(async () => {
+    const user = await requireUser();
+    const data = setlistLinkSchema.parse(input);
+    const ctx = await ctxForSetlist(data.setlistId);
+    if (!ctx) return { ok: false, error: "Setlist not found." };
+    await requireCapability(user, ctx.entry.actId, "calendar:write");
+
+    const validation = validatePlaylistUrl(data.platform, data.url);
+    if (!validation.ok) return { ok: false, error: validation.error };
+
+    if (data.id) {
+      await prisma.setlistLink.update({
+        where: { id: data.id },
+        data: {
+          platform: data.platform,
+          url: data.url,
+          label: data.label || null,
+        },
+      });
+    } else {
+      const count = await prisma.setlistLink.count({
+        where: { setlistId: data.setlistId },
+      });
+      await prisma.setlistLink.create({
+        data: {
+          setlistId: data.setlistId,
+          platform: data.platform,
+          url: data.url,
+          label: data.label || null,
+          createdById: user.id,
+          sortOrder: count + 1,
+        },
+      });
+    }
+    revalidateEntry(ctx.entry.act.slug, ctx.entryId);
+    return { ok: true };
+  });
+}
+
+export async function deleteSetlistLink(input: {
+  id: string;
+}): Promise<ActionResult> {
+  return runAction(async () => {
+    const user = await requireUser();
+    const { id } = z.object({ id: z.string().min(1) }).parse(input);
+    const link = await prisma.setlistLink.findUnique({
+      where: { id },
+      select: {
+        setlistId: true,
+        setlist: {
+          select: {
+            entryId: true,
+            entry: { select: { actId: true, act: { select: { slug: true } } } },
+          },
+        },
+      },
+    });
+    if (!link) return { ok: false, error: "Link not found." };
+    await requireCapability(user, link.setlist.entry.actId, "calendar:write");
+    await prisma.setlistLink.delete({ where: { id } });
+    revalidateEntry(link.setlist.entry.act.slug, link.setlist.entryId);
     return { ok: true };
   });
 }

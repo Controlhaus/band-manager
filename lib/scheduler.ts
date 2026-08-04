@@ -6,6 +6,7 @@ import {
   emailNotifications,
   type NotificationInput,
 } from "./notifications";
+import { runEnrichmentTick, runEnrichmentMaintenance } from "./enrichment";
 
 /**
  * Deadline-reminder scheduler (§17.5). One node-cron job in the app process,
@@ -25,6 +26,26 @@ export function startScheduler(): void {
     );
   });
   console.log("[scheduler] deadline-reminder job scheduled (*/15 * * * *)");
+
+  // §18.4 — async enrichment runner (every 30s) + daily cache/session prune.
+  let enrichmentBusy = false;
+  cron.schedule("*/30 * * * * *", () => {
+    if (enrichmentBusy) return; // never overlap ticks
+    enrichmentBusy = true;
+    runEnrichmentTick()
+      .catch((err) => console.error("[scheduler] enrichment tick failed:", err))
+      .finally(() => {
+        enrichmentBusy = false;
+      });
+  });
+  cron.schedule("30 3 * * *", () => {
+    runEnrichmentMaintenance().catch((err) =>
+      console.error("[scheduler] enrichment maintenance failed:", err),
+    );
+  });
+  console.log(
+    "[scheduler] enrichment runner scheduled (*/30s) + maintenance (30 3 * * *)",
+  );
 }
 
 export async function runDeadlineReminders(): Promise<void> {

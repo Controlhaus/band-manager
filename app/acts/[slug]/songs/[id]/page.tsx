@@ -3,6 +3,7 @@ import { requireSession } from "@/lib/session";
 import { loadActForUser } from "@/lib/act-access";
 import { prisma } from "@/lib/prisma";
 import { can } from "@/lib/roles";
+import { env } from "@/lib/env";
 import { songUsage } from "@/lib/set-lists-queries";
 import { SongDetail } from "@/components/songs/song-detail";
 import type { FileItem } from "@/components/files/file-list";
@@ -24,6 +25,7 @@ export default async function SongDetailPage({
     include: {
       links: { orderBy: { createdAt: "asc" } },
       versions: { orderBy: { createdAt: "asc" } },
+      enrichmentJobs: { orderBy: { kind: "asc" } },
     },
   });
   if (!song) notFound();
@@ -65,10 +67,31 @@ export default async function SongDetailPage({
     filesByVersion.set(f.entityId, arr);
   }
 
+  // The Apple Music web URL lives on the ITUNES-sourced APPLE_MUSIC link.
+  const appleLink = song.links.find(
+    (l) => l.platform === "APPLE_MUSIC" && l.source === "ITUNES" && !l.versionId,
+  );
+
   return (
     <SongDetail
       slug={slug}
       canWrite={can(act.role, "song:write")}
+      resolutionEnabled={env.musicResolutionEnabled}
+      recording={{
+        appleTrackId: song.appleTrackId,
+        album: song.album,
+        artworkUrl: song.artworkUrl,
+        previewUrl: song.previewUrl,
+        trackViewUrl: appleLink?.url ?? null,
+        releaseDate: song.releaseDate ? song.releaseDate.toISOString() : null,
+        writers: song.writers,
+        resolutionStatus: song.resolutionStatus,
+      }}
+      enrichmentJobs={song.enrichmentJobs.map((j) => ({
+        kind: j.kind,
+        state: j.state,
+        lastError: j.lastError,
+      }))}
       song={{
         id: song.id,
         title: song.title,

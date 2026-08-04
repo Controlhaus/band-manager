@@ -2,11 +2,15 @@ import { notFound } from "next/navigation";
 import { requireSession } from "@/lib/session";
 import { loadActForUser } from "@/lib/act-access";
 import { can } from "@/lib/roles";
+import { env } from "@/lib/env";
 import {
   queryCatalog,
   isCatalogSort,
   type CatalogSort,
 } from "@/lib/song-catalog";
+import { Button } from "@/components/ui/button";
+import Link from "next/link";
+import { Upload } from "lucide-react";
 import { CatalogFilters } from "@/components/songs/catalog-filters";
 import { CatalogTable } from "@/components/songs/catalog-table";
 import { CreateSongDialog } from "@/components/songs/create-song-dialog";
@@ -54,6 +58,13 @@ export default async function SongsPage({
         </div>
         {canWrite && (
           <div className="flex items-center gap-2">
+            {env.musicResolutionEnabled && (
+              <Button asChild variant="outline" size="sm">
+                <Link href={`/acts/${slug}/songs/import`}>
+                  <Upload /> Import songs
+                </Link>
+              </Button>
+            )}
             <ImportAlbumDialog actId={act.id} />
             <CreateSongDialog actId={act.id} slug={slug} />
           </div>
