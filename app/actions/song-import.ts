@@ -393,10 +393,12 @@ export async function commitSongImportSession(input: {
 
       for (const line of session.lines) {
         const candidates = readCandidates(line.candidates);
+        // A plausible-but-not-strong match is RESOLVED with no explicit pick;
+        // the review UI still shows the top candidate checked, so default to it.
         const selected =
           line.selectedCandidateIdx != null
             ? candidates[line.selectedCandidateIdx]
-            : undefined;
+            : candidates[0];
 
         if (line.action === "SKIP") continue;
 
