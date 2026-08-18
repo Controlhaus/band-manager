@@ -31,6 +31,7 @@ import {
   updateSetEntry,
   removeSetEntry,
   reorderSetEntries,
+  reorderSets,
   addSetListLink,
   removeSetListLink,
   addSetLink,
@@ -173,6 +174,32 @@ export function SetListEditor({
 
   const total = sets.reduce((sum, s) => sum + sumSeconds(s.entries), 0);
 
+  // Local order for optimistic set drag-and-drop; synced from props on refresh.
+  const [orderedSets, setOrderedSets] = React.useState(sets);
+  React.useEffect(() => setOrderedSets(sets), [sets]);
+
+  const setSensors = useSensors(
+    useSensor(PointerSensor, { activationConstraint: { distance: 5 } }),
+    useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
+  );
+
+  async function onSetsDragEnd(e: DragEndEvent) {
+    const { active, over } = e;
+    if (!over || active.id === over.id) return;
+    const oldIndex = orderedSets.findIndex((s) => s.id === active.id);
+    const newIndex = orderedSets.findIndex((s) => s.id === over.id);
+    const next = arrayMove(orderedSets, oldIndex, newIndex);
+    setOrderedSets(next);
+    const res = await reorderSets({
+      setListId: setList.id,
+      orderedSetIds: next.map((s) => s.id),
+    });
+    if (!res.ok) {
+      toast({ variant: "destructive", title: "Could not reorder sets", description: res.error });
+      setOrderedSets(sets);
+    }
+  }
+
   async function saveMeta() {
     setPending(true);
     const res = await updateSetList({ setListId: setList.id, name, notes: notes || undefined });
@@ -275,24 +302,37 @@ export function SetListEditor({
                 onAdd={(url, label) => addSetListLink({ setListId: setList.id, url, label })}
                 onRemove={(linkId) => removeSetListLink({ linkId })}
               />
-              <SetListShareRow setListId={setList.id} sets={sets} />
+              <SetListShareRow setListId={setList.id} sets={orderedSets} />
             </>
           )}
         </CardHeader>
       </Card>
 
-      {sets.map((s) => (
-        <SetCard
-          key={s.id}
-          slug={slug}
-          set={s}
-          catalog={catalog}
-          canWrite={canWrite}
-          actId={actId}
-          musicResolutionEnabled={musicResolutionEnabled}
-          streamingPlatform={streamingPlatform}
-        />
-      ))}
+      <DndContext
+        sensors={setSensors}
+        collisionDetection={closestCenter}
+        onDragEnd={onSetsDragEnd}
+      >
+        <SortableContext
+          items={orderedSets.map((s) => s.id)}
+          strategy={verticalListSortingStrategy}
+        >
+          <div className="space-y-4">
+            {orderedSets.map((s) => (
+              <SetCard
+                key={s.id}
+                slug={slug}
+                set={s}
+                catalog={catalog}
+                canWrite={canWrite}
+                actId={actId}
+                musicResolutionEnabled={musicResolutionEnabled}
+                streamingPlatform={streamingPlatform}
+              />
+            ))}
+          </div>
+        </SortableContext>
+      </DndContext>
 
       {canWrite && (
         <Button variant="outline" onClick={addSet}>
@@ -479,6 +519,15 @@ function SetCard({
 
   const total = sumSeconds(items);
 
+  const {
+    attributes: setAttributes,
+    listeners: setListeners,
+    setNodeRef: setCardRef,
+    transform: setTransform,
+    transition: setTransition,
+    isDragging: setIsDragging,
+  } = useSortable({ id: set.id });
+
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 5 } }),
     useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
@@ -522,7 +571,11 @@ function SetCard({
   }
 
   return (
-    <Card>
+    <Card
+      ref={setCardRef}
+      style={{ transform: CSS.Transform.toString(setTransform), transition: setTransition }}
+      className={setIsDragging ? "opacity-60" : undefined}
+    >
       <CardHeader className="space-y-3">
         {editing ? (
           <div className="space-y-3">
@@ -554,11 +607,24 @@ function SetCard({
         ) : (
           <>
             <div className="flex items-center justify-between gap-2">
-              <div className="min-w-0">
-                <h2 className="truncate text-lg font-semibold">{set.name}</h2>
-                <p className="text-xs text-muted-foreground">
-                  {items.length} item{items.length === 1 ? "" : "s"} · {formatDuration(total)}
-                </p>
+              <div className="flex min-w-0 items-center gap-2">
+                {canWrite && (
+                  <button
+                    type="button"
+                    className="cursor-grab text-muted-foreground"
+                    {...setAttributes}
+                    {...setListeners}
+                    aria-label="Drag to reorder set"
+                  >
+                    <GripVertical className="h-4 w-4" />
+                  </button>
+                )}
+                <div className="min-w-0">
+                  <h2 className="truncate text-lg font-semibold">{set.name}</h2>
+                  <p className="text-xs text-muted-foreground">
+                    {items.length} item{items.length === 1 ? "" : "s"} · {formatDuration(total)}
+                  </p>
+                </div>
               </div>
               <div className="flex items-center gap-2">
                 <Badge variant="secondary">{formatDuration(total)}</Badge>
