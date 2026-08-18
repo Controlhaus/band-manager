@@ -45,6 +45,7 @@ import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { ImportSetDialog } from "@/components/setlists/import-set-dialog";
+import { SetListPdfButton } from "@/components/setlists/set-list-pdf-button";
 import { toast } from "@/hooks/use-toast";
 import { formatDuration, parseDuration } from "@/lib/set-lists";
 import type { SetEntryKind } from "@prisma/client";
@@ -380,6 +381,7 @@ function SetListShareRow({
           </a>
         </Button>
       ))}
+      <SetListPdfButton setListId={setListId} />
     </div>
   );
 }

@@ -10,6 +10,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { SetListPdfButton } from "@/components/setlists/set-list-pdf-button";
 import { toast } from "@/hooks/use-toast";
 
 export function BookingSetListSelect({
@@ -44,9 +45,12 @@ export function BookingSetListSelect({
 
   if (!canManage) {
     return currentId ? (
-      <Link href={`/acts/${slug}/setlists/${currentId}`} className="text-sm font-medium text-primary hover:underline">
-        {currentName}
-      </Link>
+      <div className="flex items-center gap-3">
+        <Link href={`/acts/${slug}/setlists/${currentId}`} className="text-sm font-medium text-primary hover:underline">
+          {currentName}
+        </Link>
+        <SetListPdfButton setListId={currentId} />
+      </div>
     ) : (
       <span className="text-sm text-muted-foreground">No set list</span>
     );
@@ -68,9 +72,12 @@ export function BookingSetListSelect({
         </SelectContent>
       </Select>
       {currentId && (
-        <Link href={`/acts/${slug}/setlists/${currentId}`} className="text-sm text-primary hover:underline">
-          Open
-        </Link>
+        <>
+          <Link href={`/acts/${slug}/setlists/${currentId}`} className="text-sm text-primary hover:underline">
+            Open
+          </Link>
+          <SetListPdfButton setListId={currentId} />
+        </>
       )}
     </div>
   );
