@@ -260,7 +260,7 @@ export async function deleteCalendarEntry(input: {
   });
 }
 
-/** Duplicate an entry to a new start (§14.13). Copies setlists, not attendance. */
+/** Duplicate an entry to a new start (§14.13). Copies the set list reference, not attendance. */
 export async function duplicateEntry(input: {
   entryId: string;
   startsAt: string;
@@ -276,46 +276,26 @@ export async function duplicateEntry(input: {
 
     const src = await prisma.calendarEntry.findUnique({
       where: { id: entryId },
-      include: { setlists: { include: { items: true } } },
     });
     if (!src) return { ok: false, error: "Entry not found." };
 
     const newStart = zonedInputToUtc(startsAt, ctx.act.timezone);
 
-    const created = await prisma.$transaction(async (tx) => {
-      const entry = await tx.calendarEntry.create({
-        data: {
-          actId: src.actId,
-          kind: src.kind,
-          eventTypeId: src.eventTypeId,
-          title: `${src.title} (copy)`,
-          startsAt: newStart,
-          locationName: src.locationName,
-          locationAddress: src.locationAddress,
-          locationUrl: src.locationUrl,
-          notes: src.notes,
-          createdById: user.id,
-        },
-        select: { id: true },
-      });
-      for (const sl of src.setlists) {
-        await tx.setlist.create({
-          data: {
-            entryId: entry.id,
-            name: sl.name,
-            sortOrder: sl.sortOrder,
-            items: {
-              create: sl.items.map((it) => ({
-                position: it.position,
-                songId: it.songId,
-                songVersionId: it.songVersionId,
-                notes: it.notes,
-              })),
-            },
-          },
-        });
-      }
-      return entry;
+    const created = await prisma.calendarEntry.create({
+      data: {
+        actId: src.actId,
+        kind: src.kind,
+        eventTypeId: src.eventTypeId,
+        title: `${src.title} (copy)`,
+        startsAt: newStart,
+        locationName: src.locationName,
+        locationAddress: src.locationAddress,
+        locationUrl: src.locationUrl,
+        notes: src.notes,
+        setListId: src.setListId,
+        createdById: user.id,
+      },
+      select: { id: true },
     });
 
     revalidatePath(`/acts/${ctx.act.slug}/calendar`);

@@ -40,6 +40,38 @@ function revalidateEntry(slug: string, entryId: string) {
   revalidatePath(`/acts/${slug}/calendar/${entryId}`);
 }
 
+// Attach (or detach) an existing act set list to a calendar entry. References
+// the reusable SetList library — never copies its contents.
+export async function setEntrySetList(input: {
+  entryId: string;
+  setListId: string | null;
+}): Promise<ActionResult> {
+  return runAction(async () => {
+    const user = await requireUser();
+    const { entryId, setListId } = z
+      .object({ entryId: z.string().min(1), setListId: z.string().min(1).nullable() })
+      .parse(input);
+    const ctx = await ctxForEntry(entryId);
+    if (!ctx) return { ok: false, error: "Entry not found." };
+    await requireCapability(user, ctx.actId, "calendar:write");
+
+    if (setListId) {
+      const list = await prisma.setList.findFirst({
+        where: { id: setListId, actId: ctx.actId },
+        select: { id: true },
+      });
+      if (!list) return { ok: false, error: "Set list not found." };
+    }
+
+    await prisma.calendarEntry.update({
+      where: { id: entryId },
+      data: { setListId },
+    });
+    revalidateEntry(ctx.act.slug, entryId);
+    return { ok: true };
+  });
+}
+
 export async function createSetlist(input: {
   entryId: string;
   name?: string;

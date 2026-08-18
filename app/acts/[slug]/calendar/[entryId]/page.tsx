@@ -7,7 +7,6 @@ import { prisma } from "@/lib/prisma";
 import { can } from "@/lib/roles";
 import { formatInAct, toLocalInputValue } from "@/lib/tz";
 import { getActEventTypes } from "@/lib/event-types";
-import { INLINE_PREVIEW_MIME } from "@/lib/files";
 import {
   Card,
   CardContent,
@@ -26,11 +25,9 @@ import { CancelEntryButton } from "@/components/calendar/cancel-entry-button";
 import { FileUpload } from "@/components/files/file-upload";
 import { FileList, type FileItem } from "@/components/files/file-list";
 import {
-  SetlistEditor,
-  type SetlistVM,
-  type SongMeta,
-} from "@/components/calendar/setlist-editor";
-import type { PlaylistPlatform } from "@/lib/platform-links";
+  EntrySetList,
+  type EntrySetListVM,
+} from "@/components/calendar/entry-set-list-select";
 import type { EntryInitial } from "@/components/calendar/entry-form-dialog";
 
 export const dynamic = "force-dynamic";
@@ -60,19 +57,15 @@ export default async function EntryDetailPage({
     where: { id: entryId, actId: act.id },
     include: {
       eventType: true,
-      setlists: {
-        orderBy: { sortOrder: "asc" },
+      setList: {
         include: {
-          links: { orderBy: { sortOrder: "asc" } },
-          items: {
-            orderBy: { position: "asc" },
+          sets: {
+            orderBy: { sortOrder: "asc" },
             include: {
-              song: {
-                select: {
-                  id: true,
-                  title: true,
-                  artist: true,
-                  links: { select: { platform: true, url: true, versionId: true } },
+              entries: {
+                orderBy: { position: "asc" },
+                include: {
+                  song: { select: { title: true, artist: true, durationSec: true } },
                 },
               },
             },
@@ -92,58 +85,24 @@ export default async function EntryDetailPage({
   const canManage = can(act.role, "act:manageMembers");
   const canManageBooking = can(act.role, "booking:manage");
 
-  const [members, statuses, catalog, files, eventTypes] = await Promise.all([
+  const [members, statuses, files, eventTypes, actSetLists] = await Promise.all([
     prisma.actMembership.findMany({
       where: { actId: act.id },
       include: { user: { select: { id: true, name: true } } },
       orderBy: { user: { name: "asc" } },
     }),
     prisma.attendanceStatus.findMany({ orderBy: { sortOrder: "asc" } }),
-    prisma.song.findMany({
-      where: { actId: act.id, status: { not: "RETIRED" } },
-      select: { id: true, title: true, artist: true },
-      orderBy: { title: "asc" },
-    }),
     prisma.fileAsset.findMany({
       where: { entityType: "CALENDAR_ENTRY", entityId: entry.id },
       orderBy: { createdAt: "asc" },
     }),
     getActEventTypes(act.id),
+    prisma.setList.findMany({
+      where: { actId: act.id },
+      select: { id: true, name: true },
+      orderBy: { name: "asc" },
+    }),
   ]);
-
-  // Song metadata for the side sheet (lyrics + first previewable lead sheet).
-  const songIds = Array.from(
-    new Set(entry.setlists.flatMap((s) => s.items.map((i) => i.songId))),
-  );
-  const songMeta: Record<string, SongMeta> = {};
-  if (songIds.length) {
-    const [songs, leadSheets] = await Promise.all([
-      prisma.song.findMany({
-        where: { id: { in: songIds } },
-        select: { id: true, lyrics: true },
-      }),
-      prisma.fileAsset.findMany({
-        where: {
-          entityType: "SONG",
-          entityId: { in: songIds },
-          kind: "LEAD_SHEET",
-        },
-        orderBy: { createdAt: "asc" },
-      }),
-    ]);
-    const sheetBySong = new Map<string, { id: string; mimeType: string }>();
-    for (const f of leadSheets) {
-      if (!sheetBySong.has(f.entityId) && INLINE_PREVIEW_MIME.has(f.mimeType)) {
-        sheetBySong.set(f.entityId, { id: f.id, mimeType: f.mimeType });
-      }
-    }
-    for (const s of songs) {
-      songMeta[s.id] = {
-        lyrics: s.lyrics ?? null,
-        leadSheet: sheetBySong.get(s.id) ?? null,
-      };
-    }
-  }
 
   const attendanceByUser = new Map(entry.attendances.map((a) => [a.userId, a.statusKey]));
   const myStatusKey = attendanceByUser.get(user.id) ?? null;
@@ -172,35 +131,26 @@ export default async function EntryDetailPage({
   const needsAck = isConfirmed && (!myAck || myAck.versionAtAck < entry.version);
   const iAmStale = Boolean(isConfirmed && myAck && myAck.versionAtAck < entry.version);
 
-  const setlistVMs: SetlistVM[] = entry.setlists.map((sl) => ({
-    id: sl.id,
-    name: sl.name,
-    links: sl.links.map((l) => ({
-      id: l.id,
-      platform: l.platform as PlaylistPlatform,
-      url: l.url,
-      label: l.label,
-    })),
-    items: sl.items.map((it) => {
-      // Version-level link wins over song-level for the same platform.
-      const links: Partial<Record<string, string>> = {};
-      for (const l of it.song.links) {
-        if (l.versionId === null) links[l.platform] ??= l.url;
+  const setListVM: EntrySetListVM | null = entry.setList
+    ? {
+        id: entry.setList.id,
+        name: entry.setList.name,
+        notes: entry.setList.notes,
+        sets: entry.setList.sets.map((s) => ({
+          id: s.id,
+          name: s.name,
+          entries: s.entries.map((e) => ({
+            id: e.id,
+            kind: e.kind,
+            title: e.song?.title ?? null,
+            artist: e.song?.artist ?? null,
+            banterDescription: e.banterDescription,
+            banterSeconds: e.banterSeconds,
+            songDurationSec: e.song?.durationSec ?? null,
+          })),
+        })),
       }
-      for (const l of it.song.links) {
-        if (l.versionId === it.songVersionId) links[l.platform] = l.url;
-      }
-      return {
-        id: it.id,
-        songId: it.songId,
-        songVersionId: it.songVersionId,
-        notes: it.notes,
-        title: it.song.title,
-        artist: it.song.artist,
-        links,
-      };
-    }),
-  }));
+    : null;
 
   const initial: EntryInitial = {
     entryId: entry.id,
@@ -420,13 +370,12 @@ export default async function EntryDetailPage({
         </Card>
       )}
 
-      <SetlistEditor
+      <EntrySetList
         entryId={entry.id}
         slug={slug}
         canWrite={canWrite}
-        setlists={setlistVMs}
-        catalog={catalog}
-        songMeta={songMeta}
+        setLists={actSetLists}
+        current={setListVM}
       />
 
       <div className="grid gap-6 lg:grid-cols-2">

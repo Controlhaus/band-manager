@@ -509,6 +509,8 @@ model CalendarEntry {
   version         Int           @default(1)
   bookingGroupId  String?
   bookingGroup    BookingGroup? @relation("BookingCandidates", fields: [bookingGroupId], references: [id], onDelete: SetNull)
+  setListId       String?
+  setList         SetList?      @relation(fields: [setListId], references: [id], onDelete: SetNull)
   createdById     String?
   createdBy       User?         @relation("EntryCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
   createdAt       DateTime      @default(now())
@@ -524,6 +526,7 @@ model CalendarEntry {
   @@index([actId])
   @@index([startsAt])
   @@index([bookingGroupId])
+  @@index([setListId])
   @@map("calendar_entry")
 }
 
@@ -710,9 +713,10 @@ model SetList {
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
-  sets     SetListSet[]
-  bookings BookingGroup[]
-  links    SetListLink[]
+  sets            SetListSet[]
+  bookings        BookingGroup[]
+  links           SetListLink[]
+  calendarEntries CalendarEntry[]
 
   @@index([actId])
   @@map("set_list")
