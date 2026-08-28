@@ -54,6 +54,28 @@ export function buildTxt(items: ExportItem[]): string {
   return items.map(displayLine).join("\n") + "\n";
 }
 
+/** A song with lyrics for the set-list lyrics export. */
+export interface LyricsExportItem {
+  title: string;
+  artist: string | null;
+  lyrics: string;
+}
+
+/**
+ * Plain-text lyrics booklet: one song per block (header = title — artist),
+ * separated by a form feed so text-aware printers page-break between songs.
+ */
+export function buildLyricsTxt(items: LyricsExportItem[]): string {
+  return (
+    items
+      .map((it) => {
+        const header = it.artist ? `${it.title} — ${it.artist}` : it.title;
+        return `${header}\n\n${it.lyrics.trim()}\n`;
+      })
+      .join("\n\f\n") + "\n"
+  );
+}
+
 function csvCell(value: string | number | null): string {
   if (value === null || value === undefined) return "";
   const str = String(value);

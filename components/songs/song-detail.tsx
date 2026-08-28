@@ -2,13 +2,14 @@
 import * as React from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
-import { Copy, Pencil, Trash2 } from "lucide-react";
+import { Copy, Pencil, Search, Trash2 } from "lucide-react";
 import {
   updateSong,
   deleteSong,
   retireSong,
   duplicateSong,
   updateSongLyrics,
+  searchSongLyrics,
   upsertSongLink,
   deleteSongLink,
   upsertSongVersion,
@@ -26,6 +27,13 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogTrigger,
+} from "@/components/ui/dialog";
 import {
   Select,
   SelectContent,
@@ -162,6 +170,9 @@ export function SongDetail({
             canWrite={canWrite}
             title={song.title}
             artist={song.artist}
+            album={song.album}
+            durationSec={song.durationSec}
+            style={song.style}
             recording={recording}
             enrichmentJobs={enrichmentJobs}
             resolutionEnabled={resolutionEnabled}
@@ -171,7 +182,14 @@ export function SongDetail({
         </TabsContent>
 
         <TabsContent value="lyrics">
-          <LyricsSection songId={song.id} canWrite={canWrite} lyrics={song.lyrics} />
+          <LyricsSection
+            songId={song.id}
+            canWrite={canWrite}
+            lyrics={song.lyrics}
+            title={song.title}
+            artist={song.artist}
+            resolutionEnabled={resolutionEnabled}
+          />
         </TabsContent>
 
         <TabsContent value="versions">
@@ -350,14 +368,27 @@ function InfoSection({
   );
 }
 
+type LyricsHit = {
+  title: string;
+  artist: string;
+  album: string | null;
+  plainLyrics: string;
+};
+
 function LyricsSection({
   songId,
   canWrite,
   lyrics,
+  title,
+  artist,
+  resolutionEnabled,
 }: {
   songId: string;
   canWrite: boolean;
   lyrics: string;
+  title: string;
+  artist: string | null;
+  resolutionEnabled: boolean;
 }) {
   const router = useRouter();
   const [editing, setEditing] = React.useState(false);
@@ -377,14 +408,30 @@ function LyricsSection({
     router.refresh();
   }
 
+  // Load fetched lyrics into the editor so the member can review before saving.
+  function applyFetched(text: string) {
+    setValue(text);
+    setEditing(true);
+  }
+
   return (
     <Card>
       <CardHeader className="flex-row items-center justify-between space-y-0">
         <CardTitle className="text-base">Lyrics</CardTitle>
         {canWrite && !editing && (
-          <Button size="sm" variant="outline" onClick={() => setEditing(true)}>
-            <Pencil /> Edit
-          </Button>
+          <div className="flex gap-2">
+            {resolutionEnabled && (
+              <LyricsSearchDialog
+                songId={songId}
+                title={title}
+                artist={artist}
+                onPicked={applyFetched}
+              />
+            )}
+            <Button size="sm" variant="outline" onClick={() => setEditing(true)}>
+              <Pencil /> Edit
+            </Button>
+          </div>
         )}
       </CardHeader>
       <CardContent>
@@ -419,6 +466,86 @@ function LyricsSection({
         )}
       </CardContent>
     </Card>
+  );
+}
+
+function LyricsSearchDialog({
+  songId,
+  title,
+  artist,
+  onPicked,
+}: {
+  songId: string;
+  title: string;
+  artist: string | null;
+  onPicked: (text: string) => void;
+}) {
+  const [open, setOpen] = React.useState(false);
+  const [pending, setPending] = React.useState(false);
+  const [searched, setSearched] = React.useState(false);
+  const [t, setT] = React.useState(title);
+  const [a, setA] = React.useState(artist ?? "");
+  const [hits, setHits] = React.useState<LyricsHit[]>([]);
+
+  async function search() {
+    setPending(true);
+    const res = await searchSongLyrics({ songId, title: t, artist: a });
+    setPending(false);
+    setSearched(true);
+    if (!res.ok) {
+      toast({ variant: "destructive", title: "Search failed", description: res.error });
+      return;
+    }
+    setHits(res.data?.candidates ?? []);
+  }
+
+  function pick(hit: LyricsHit) {
+    onPicked(hit.plainLyrics);
+    setOpen(false);
+    toast({ title: "Lyrics loaded", description: "Review and save." });
+  }
+
+  return (
+    <Dialog open={open} onOpenChange={setOpen}>
+      <DialogTrigger asChild>
+        <Button size="sm" variant="outline">
+          <Search /> Search online
+        </Button>
+      </DialogTrigger>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>Search lyrics online</DialogTitle>
+        </DialogHeader>
+        <div className="grid grid-cols-2 gap-2">
+          <Input value={t} onChange={(e) => setT(e.target.value)} placeholder="Title" aria-label="Title" />
+          <Input value={a} onChange={(e) => setA(e.target.value)} placeholder="Artist" aria-label="Artist" />
+        </div>
+        <Button onClick={search} disabled={pending || !t.trim()} size="sm">
+          {pending ? "Searching…" : "Search"}
+        </Button>
+        <div className="max-h-72 space-y-1 overflow-y-auto">
+          {hits.map((hit, idx) => (
+            <div key={idx} className="flex items-center gap-2 rounded border p-2 text-sm">
+              <span className="min-w-0 flex-1">
+                <span className="block truncate font-medium">{hit.title}</span>
+                <span className="block truncate text-muted-foreground">
+                  {hit.artist}
+                  {hit.album ? ` · ${hit.album}` : ""}
+                </span>
+              </span>
+              <Button size="sm" variant="outline" onClick={() => pick(hit)}>
+                Use
+              </Button>
+            </div>
+          ))}
+          {searched && !pending && hits.length === 0 && (
+            <p className="text-sm text-muted-foreground">
+              No lyrics found. Try adjusting the title or artist.
+            </p>
+          )}
+        </div>
+      </DialogContent>
+    </Dialog>
   );
 }
 

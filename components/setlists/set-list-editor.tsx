@@ -19,7 +19,7 @@ import {
   arrayMove,
 } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
-import { ArrowLeft, Copy, Download, ExternalLink, GripVertical, MessageSquare, Music, Pencil, Plus, Trash2, X } from "lucide-react";
+import { ArrowLeft, Copy, Download, ExternalLink, FileText, GripVertical, MessageSquare, Music, Pencil, Plus, Trash2, X } from "lucide-react";
 import {
   updateSetList,
   createSet,
@@ -381,6 +381,16 @@ function SetListShareRow({
           </a>
         </Button>
       ))}
+      <Button asChild size="sm" variant="outline">
+        <a href={`/api/set-lists/${setListId}/lyrics?format=txt`}>
+          <Download /> Lyrics TXT
+        </a>
+      </Button>
+      <Button asChild size="sm" variant="outline">
+        <a href={`/set-lists/${setListId}/lyrics`} target="_blank" rel="noreferrer">
+          <FileText /> Lyrics PDF
+        </a>
+      </Button>
       <SetListPdfButton setListId={setListId} />
     </div>
   );

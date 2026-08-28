@@ -28,6 +28,7 @@ const CACHE_TTL_MS: Record<ExternalProvider, number | null> = {
   ITUNES: 30 * 24 * 60 * 60 * 1000, // 30 days
   ODESLI: null, // platform links are effectively permanent
   MUSICBRAINZ: 90 * 24 * 60 * 60 * 1000, // 90 days
+  LRCLIB: 180 * 24 * 60 * 60 * 1000, // 180 days
 };
 
 export type ExternalResult<T> =
@@ -82,11 +83,12 @@ class TokenBucket {
   }
 }
 
-// iTunes: 20 req/min, Odesli: 10 req/min, MusicBrainz: 1 req/sec.
+// iTunes: 20 req/min, Odesli: 10 req/min, MusicBrainz: 1 req/sec, LRCLIB: 2 req/sec.
 const BUCKETS: Record<ExternalProvider, TokenBucket> = {
   ITUNES: new TokenBucket(20, 20 / 60_000),
   ODESLI: new TokenBucket(10, 10 / 60_000),
   MUSICBRAINZ: new TokenBucket(1, 1 / 1_000),
+  LRCLIB: new TokenBucket(2, 2 / 1_000),
 };
 
 // ---- cache -----------------------------------------------------------------

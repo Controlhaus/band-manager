@@ -94,6 +94,7 @@ enum ImportLineState {
 enum EnrichmentKind {
   ODESLI
   MUSICBRAINZ
+  LYRICS
 }
 
 enum EnrichmentState {
@@ -107,6 +108,7 @@ enum ExternalProvider {
   ITUNES
   ODESLI
   MUSICBRAINZ
+  LRCLIB
 }
 
 enum CalendarKind {

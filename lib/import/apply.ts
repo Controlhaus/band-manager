@@ -100,9 +100,9 @@ export async function createVersionFromCandidate(
   return version.id;
 }
 
-/** Queue (or reset) the ODESLI + MUSICBRAINZ enrichment jobs for a song. */
+/** Queue (or reset) the ODESLI + MUSICBRAINZ + LYRICS enrichment jobs for a song. */
 export async function enqueueEnrichment(db: Db, songId: string): Promise<void> {
-  const kinds = ["ODESLI", "MUSICBRAINZ"] as const;
+  const kinds = ["ODESLI", "MUSICBRAINZ", "LYRICS"] as const;
   for (const kind of kinds) {
     await db.enrichmentJob.upsert({
       where: { songId_kind: { songId, kind } },

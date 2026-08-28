@@ -14,6 +14,7 @@ import { prisma } from "./prisma";
 import { env } from "./env";
 import { resolveLinks } from "./external/odesli";
 import { enrichRecording } from "./external/musicbrainz";
+import { fetchLyrics } from "./external/lyrics";
 
 const CLAIM_LIMIT = 20;
 const MAX_ATTEMPTS = 5;
@@ -122,8 +123,36 @@ async function runMusicbrainz(jobId: string, songId: string): Promise<void> {
   await markDone(jobId);
 }
 
+async function runLyrics(jobId: string, songId: string): Promise<void> {
+  const song = await prisma.song.findUnique({
+    where: { id: songId },
+    select: { title: true, artist: true, durationSec: true, lyrics: true },
+  });
+  // Never overwrite lyrics a member has already added/fetched.
+  if (!song || song.lyrics) {
+    await markDone(jobId);
+    return;
+  }
+
+  const res = await fetchLyrics({
+    title: song.title,
+    artist: song.artist ?? "",
+    durationSec: song.durationSec,
+  });
+  if (!res.ok) throw new Error(res.error);
+
+  if (res.data) {
+    await prisma.song.update({
+      where: { id: songId },
+      data: { lyrics: res.data },
+    });
+  }
+  await markDone(jobId);
+}
+
 async function processJob(job: ClaimedJob): Promise<void> {
   if (job.kind === "ODESLI") await runOdesli(job.id, job.songId);
+  else if (job.kind === "LYRICS") await runLyrics(job.id, job.songId);
   else await runMusicbrainz(job.id, job.songId);
 }
 

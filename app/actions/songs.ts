@@ -10,6 +10,8 @@ import {
   type SessionUser,
 } from "@/lib/permissions";
 import { runAction, type ActionResult } from "@/lib/action";
+import { env } from "@/lib/env";
+import { searchLyrics, type LyricsCandidate } from "@/lib/external/lyrics";
 
 async function requireUser(): Promise<SessionUser> {
   const session = await getSession();
@@ -179,6 +181,37 @@ export async function updateSongLyrics(input: {
     const slug = await slugForAct(actId);
     if (slug) revalidatePath(`/acts/${slug}/songs/${songId}`);
     return { ok: true };
+  });
+}
+
+/** Search LRCLIB for candidate lyrics so a member can pick the right match. */
+export async function searchSongLyrics(input: {
+  songId: string;
+  title?: string;
+  artist?: string;
+}): Promise<ActionResult<{ candidates: LyricsCandidate[] }>> {
+  return runAction(async () => {
+    const user = await requireUser();
+    const { songId, title, artist } = z
+      .object({
+        songId: z.string().min(1),
+        title: z.string().trim().max(200).optional(),
+        artist: z.string().trim().max(200).optional(),
+      })
+      .parse(input);
+    if (!env.musicResolutionEnabled) {
+      return { ok: false, error: "Lyrics lookup is disabled." };
+    }
+    const song = await prisma.song.findUnique({
+      where: { id: songId },
+      select: { actId: true, title: true, artist: true },
+    });
+    if (!song) return { ok: false, error: "Song not found." };
+    await requireCapability(user, song.actId, "song:write");
+
+    const res = await searchLyrics(title ?? song.title, artist ?? song.artist ?? "");
+    if (!res.ok) return { ok: false, error: res.error };
+    return { ok: true, data: { candidates: res.data } };
   });
 }
 

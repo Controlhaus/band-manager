@@ -525,12 +525,22 @@ export async function abandonSongImportSession(input: {
 
 // ---- single-song resolve / re-resolve / unlink ------------------------------
 
+/** Song metadata the caller may auto-fill/correct from the chosen recording. */
+const metadataOverrideSchema = z.object({
+  title: z.string().trim().min(1).max(200).optional(),
+  artist: z.string().trim().max(200).optional(),
+  album: z.string().trim().max(200).optional(),
+  durationSec: z.number().int().min(0).max(36000).optional(),
+  style: z.string().trim().max(100).optional(),
+});
+
 const resolveSingleSchema = z.object({
   songId: z.string().min(1),
   // Search mode: provide a query. Apply mode: provide a candidate.
   title: z.string().trim().max(200).optional(),
   artist: z.string().trim().max(200).optional(),
   candidate: z.custom<TrackCandidate>().optional(),
+  overrides: metadataOverrideSchema.optional(),
 });
 
 async function actIdForSong(songId: string): Promise<{
@@ -564,7 +574,9 @@ export async function resolveSingleSong(
       await prisma.$transaction(async (tx) => {
         await tx.song.update({
           where: { id: data.songId },
-          data: candidateAppleFields(candidate),
+          // Apple fields are always refreshed; metadata overrides are the
+          // caller's confirmed auto-fills/corrections (title, artist, …).
+          data: { ...candidateAppleFields(candidate), ...(data.overrides ?? {}) },
         });
         await writeCandidateLinks(tx, data.songId, candidate);
         await enqueueEnrichment(tx, data.songId);
@@ -621,7 +633,7 @@ export async function unlinkSongRecording(input: {
 
 export async function requeueEnrichmentJob(input: {
   songId: string;
-  kind: "ODESLI" | "MUSICBRAINZ";
+  kind: "ODESLI" | "MUSICBRAINZ" | "LYRICS";
 }): Promise<ActionResult> {
   return runAction(async () => {
     requireResolutionEnabled();
@@ -629,7 +641,7 @@ export async function requeueEnrichmentJob(input: {
     const { songId, kind } = z
       .object({
         songId: z.string().min(1),
-        kind: z.enum(["ODESLI", "MUSICBRAINZ"]),
+        kind: z.enum(["ODESLI", "MUSICBRAINZ", "LYRICS"]),
       })
       .parse(input);
     const act = await actIdForSong(songId);

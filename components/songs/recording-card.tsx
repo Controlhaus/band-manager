@@ -10,6 +10,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import {
   Dialog,
@@ -54,6 +55,7 @@ const STATUS_LABEL: Record<SongResolutionStatus, string> = {
 const KIND_LABEL: Record<EnrichmentKind, string> = {
   ODESLI: "Streaming links",
   MUSICBRAINZ: "Credits & IDs",
+  LYRICS: "Lyrics",
 };
 
 export function RecordingCard({
@@ -61,6 +63,9 @@ export function RecordingCard({
   canWrite,
   title,
   artist,
+  album,
+  durationSec,
+  style,
   recording,
   enrichmentJobs,
   resolutionEnabled,
@@ -69,6 +74,9 @@ export function RecordingCard({
   canWrite: boolean;
   title: string;
   artist: string | null;
+  album: string | null;
+  durationSec: number | null;
+  style: string | null;
   recording: RecordingData;
   enrichmentJobs: EnrichmentJobView[];
   resolutionEnabled: boolean;
@@ -160,6 +168,7 @@ export function RecordingCard({
               songId={songId}
               title={title}
               artist={artist}
+              songMeta={{ title, artist, album, durationSec, style }}
               linked={linked}
               onDone={() => router.refresh()}
             />
@@ -255,16 +264,102 @@ function UnlinkButton({
   );
 }
 
+type SongMeta = {
+  title: string;
+  artist: string | null;
+  album: string | null;
+  durationSec: number | null;
+  style: string | null;
+};
+
+type MetaOverrides = {
+  title?: string;
+  artist?: string;
+  album?: string;
+  durationSec?: number;
+  style?: string;
+};
+
+type MetaMismatch = {
+  key: keyof MetaOverrides;
+  label: string;
+  current: string;
+  incoming: string;
+  value: string | number;
+};
+
+function normalizeText(v: string): string {
+  return v.trim().toLowerCase().replace(/\s+/g, " ");
+}
+
+function fmtLength(sec: number): string {
+  const m = Math.floor(sec / 60);
+  return `${m}:${String(sec % 60).padStart(2, "0")}`;
+}
+
+/**
+ * Compare a chosen recording against the song. Empty song fields become silent
+ * auto-fills; differing non-empty fields become mismatches needing confirmation.
+ */
+function computeMetaDiff(
+  song: SongMeta,
+  c: TrackCandidate,
+): { autofills: MetaOverrides; mismatches: MetaMismatch[] } {
+  const autofills: MetaOverrides = {};
+  const mismatches: MetaMismatch[] = [];
+
+  const textFields: {
+    key: "title" | "artist" | "album" | "style";
+    label: string;
+    current: string | null;
+    incoming: string | null;
+  }[] = [
+    { key: "title", label: "Title", current: song.title, incoming: c.title },
+    { key: "artist", label: "Artist", current: song.artist, incoming: c.artist },
+    { key: "album", label: "Album", current: song.album, incoming: c.album },
+    { key: "style", label: "Style", current: song.style, incoming: c.genre },
+  ];
+
+  for (const f of textFields) {
+    const incoming = f.incoming?.trim();
+    if (!incoming) continue;
+    const current = f.current?.trim() ?? "";
+    if (!current) {
+      autofills[f.key] = incoming;
+    } else if (normalizeText(current) !== normalizeText(incoming)) {
+      mismatches.push({ key: f.key, label: f.label, current, incoming, value: incoming });
+    }
+  }
+
+  if (c.durationSec != null) {
+    if (song.durationSec == null) {
+      autofills.durationSec = c.durationSec;
+    } else if (song.durationSec !== c.durationSec) {
+      mismatches.push({
+        key: "durationSec",
+        label: "Length",
+        current: fmtLength(song.durationSec),
+        incoming: fmtLength(c.durationSec),
+        value: c.durationSec,
+      });
+    }
+  }
+
+  return { autofills, mismatches };
+}
+
 function ResolveDialog({
   songId,
   title,
   artist,
+  songMeta,
   linked,
   onDone,
 }: {
   songId: string;
   title: string;
   artist: string | null;
+  songMeta: SongMeta;
   linked: boolean;
   onDone: () => void;
 }) {
@@ -273,6 +368,12 @@ function ResolveDialog({
   const [t, setT] = React.useState(title);
   const [a, setA] = React.useState(artist ?? "");
   const [candidates, setCandidates] = React.useState<TrackCandidate[]>([]);
+  const [confirm, setConfirm] = React.useState<{
+    candidate: TrackCandidate;
+    autofills: MetaOverrides;
+    mismatches: MetaMismatch[];
+  } | null>(null);
+  const [accepted, setAccepted] = React.useState<Record<string, boolean>>({});
 
   async function search() {
     setPending(true);
@@ -285,17 +386,41 @@ function ResolveDialog({
     setCandidates(res.data?.candidates ?? []);
   }
 
-  async function apply(candidate: TrackCandidate) {
+  async function linkCandidate(candidate: TrackCandidate, overrides: MetaOverrides) {
     setPending(true);
-    const res = await resolveSingleSong({ songId, candidate });
+    const res = await resolveSingleSong({
+      songId,
+      candidate,
+      overrides: Object.keys(overrides).length ? overrides : undefined,
+    });
     setPending(false);
     if (!res.ok) {
       toast({ variant: "destructive", title: "Could not link", description: res.error });
       return;
     }
     toast({ title: "Recording linked" });
+    setConfirm(null);
     setOpen(false);
     onDone();
+  }
+
+  function apply(candidate: TrackCandidate) {
+    const { autofills, mismatches } = computeMetaDiff(songMeta, candidate);
+    if (mismatches.length === 0) {
+      void linkCandidate(candidate, autofills);
+      return;
+    }
+    setAccepted(Object.fromEntries(mismatches.map((m) => [m.key, true])));
+    setConfirm({ candidate, autofills, mismatches });
+  }
+
+  function confirmApply() {
+    if (!confirm) return;
+    const overrides: MetaOverrides = { ...confirm.autofills };
+    for (const m of confirm.mismatches) {
+      if (accepted[m.key]) (overrides as Record<string, unknown>)[m.key] = m.value;
+    }
+    void linkCandidate(confirm.candidate, overrides);
   }
 
   return (
@@ -345,6 +470,54 @@ function ResolveDialog({
           </Button>
         </DialogFooter>
       </DialogContent>
+
+      <Dialog open={confirm != null} onOpenChange={(v) => !v && setConfirm(null)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Confirm metadata changes</DialogTitle>
+          </DialogHeader>
+          {confirm && (
+            <div className="space-y-3 text-sm">
+              {Object.keys(confirm.autofills).length > 0 && (
+                <p className="text-muted-foreground">
+                  Empty fields will be filled: {Object.keys(confirm.autofills).join(", ")}.
+                </p>
+              )}
+              <p className="text-muted-foreground">
+                Choose which existing values to replace with the recording&apos;s:
+              </p>
+              <ul className="space-y-2">
+                {confirm.mismatches.map((m) => (
+                  <li key={m.key} className="flex items-start gap-2">
+                    <Checkbox
+                      id={`mm-${m.key}`}
+                      checked={accepted[m.key] ?? false}
+                      onCheckedChange={(v) =>
+                        setAccepted((prev) => ({ ...prev, [m.key]: v === true }))
+                      }
+                      className="mt-0.5"
+                    />
+                    <label htmlFor={`mm-${m.key}`} className="min-w-0 flex-1">
+                      <span className="font-medium">{m.label}</span>
+                      <span className="block text-muted-foreground">
+                        <span className="line-through">{m.current}</span> → {m.incoming}
+                      </span>
+                    </label>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+          <DialogFooter>
+            <Button variant="ghost" onClick={() => setConfirm(null)} disabled={pending}>
+              Cancel
+            </Button>
+            <Button onClick={confirmApply} disabled={pending}>
+              {pending ? "Linking…" : "Apply & link"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </Dialog>
   );
 }
