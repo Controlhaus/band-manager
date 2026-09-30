@@ -12,13 +12,33 @@ import {
 } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { AcceptInviteForm } from "./accept-form";
+import type { InviteErrorCode } from "@/app/actions/invitations";
+
+const ERROR_MESSAGES: Record<InviteErrorCode, string> = {
+  invalid: "This invitation is invalid, already used, or has expired.",
+  "rate-limited": "Too many attempts. Please wait a few minutes and try again.",
+  "wrong-account": "You're signed in with a different email. Sign in with the invited email below.",
+  "bad-password": "Incorrect password. Try again, or use the forgot-password link below.",
+  "password-short": "Password must be at least 10 characters.",
+  "password-mismatch": "Passwords don't match.",
+  "name-required": "Please enter your name.",
+  "have-account": "An account already exists for this email. Refresh the page and sign in to accept.",
+  generic: "Something went wrong. Please try again.",
+};
 
 export default async function InvitePage({
   params,
+  searchParams,
 }: {
   params: Promise<{ token: string }>;
+  searchParams: Promise<{ error?: string }>;
 }) {
   const { token } = await params;
+  const { error } = await searchParams;
+  const errorMessage =
+    error && error in ERROR_MESSAGES
+      ? ERROR_MESSAGES[error as InviteErrorCode]
+      : null;
 
   const invite = await prisma.invitation.findUnique({
     where: { tokenHash: hashInviteToken(token) },
@@ -74,6 +94,14 @@ export default async function InvitePage({
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-4">
+        {errorMessage && (
+          <p
+            className="rounded-md border border-destructive/50 bg-destructive/10 p-3 text-sm text-destructive"
+            role="alert"
+          >
+            {errorMessage}
+          </p>
+        )}
         {actNames.length > 0 && (
           <div className="rounded-md border bg-muted/40 p-3 text-sm">
             <p className="mb-1 font-medium">You&apos;ll join:</p>

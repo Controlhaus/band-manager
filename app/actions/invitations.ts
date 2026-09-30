@@ -2,6 +2,8 @@
 import { z } from "zod";
 import { revalidatePath } from "next/cache";
 import { headers } from "next/headers";
+import { redirect } from "next/navigation";
+import { APIError } from "better-auth/api";
 import { prisma } from "@/lib/prisma";
 import { auth, createCredentialUser } from "@/lib/auth";
 import { getSession } from "@/lib/session";
@@ -175,100 +177,210 @@ export async function revokeInvitation(
   });
 }
 
-const acceptSchema = z.object({
-  token: z.string().min(1),
-  name: z.string().trim().min(1).max(120).optional(),
-  password: z.string().min(10).optional(),
-});
+// ---------------------------------------------------------------------------
+// Invite acceptance (§15.4) — progressive-enhancement form actions.
+// Bound directly to <form action> so the invite page works without client JS
+// (in-app email browsers frequently fail to hydrate). Errors surface via an
+// ?error= code on the invite page; success redirects to /acts.
+// ---------------------------------------------------------------------------
 
-/**
- * Accept an invitation (§15.4). Transactional. Existing accounts must be
- * signed in with the matching email; new accounts set name + password.
- */
-export async function acceptInvitation(
-  input: z.infer<typeof acceptSchema>,
-): Promise<ActionResult<{ createdAccount: boolean }>> {
-  return runAction<{ createdAccount: boolean }>(async () => {
-    const { token, name, password } = acceptSchema.parse(input);
-    const invite = await prisma.invitation.findUnique({
-      where: { tokenHash: hashInviteToken(token) },
-    });
-    if (!invite || invite.acceptedAt || invite.expiresAt < new Date()) {
-      return { ok: false, error: "This invitation is invalid or has expired." };
-    }
+export type InviteErrorCode =
+  | "invalid"
+  | "rate-limited"
+  | "wrong-account"
+  | "bad-password"
+  | "password-short"
+  | "password-mismatch"
+  | "name-required"
+  | "have-account"
+  | "generic";
 
-    const email = normalizeEmail(invite.email);
-    const hdrs = await headers();
-    const ip =
-      hdrs.get("x-forwarded-for")?.split(",")[0]?.trim() ??
-      hdrs.get("x-real-ip") ??
-      "unknown";
-    const rl = await consumeRateLimit("invite_accept", ip, email);
-    if (!rl.allowed) {
-      return {
-        ok: false,
-        error: `Too many attempts. Try again in ${rl.retryAfterSeconds} seconds.`,
-      };
-    }
+function inviteErrorRedirect(token: string, code: InviteErrorCode): never {
+  redirect(`/invite/${encodeURIComponent(token)}?error=${code}`);
+}
 
-    const grants = parseGrants(invite.grants);
-    // Skip grants for acts that no longer exist (§15.4).
-    const acts = await prisma.act.findMany({
-      where: { id: { in: grants.map((g) => g.actId) } },
-      select: { id: true },
-    });
-    const liveActIds = new Set(acts.map((a) => a.id));
-    const liveGrants = grants.filter((g) => liveActIds.has(g.actId));
+type LoadedInvite = {
+  inviteId: string;
+  email: string;
+  liveGrants: InvitationGrant[];
+};
 
-    const existingUser = await prisma.user.findUnique({ where: { email } });
-
-    if (existingUser) {
-      const session = await getSession();
-      if (!session || normalizeEmail(session.email) !== email) {
-        return {
-          ok: false,
-          error: `Please sign in as ${email} to accept this invitation.`,
-        };
-      }
-      await applyGrantsAndAccept(existingUser.id, invite.id, liveGrants);
-      revalidatePath("/acts");
-      return { ok: true, data: { createdAccount: false } };
-    }
-
-    // New account path.
-    if (!name || !password) {
-      return {
-        ok: false,
-        error: "Enter your name and a password of at least 10 characters.",
-      };
-    }
-
-    await prisma.$transaction(async (tx) => {
-      const created = await createCredentialUser(tx, {
-        email,
-        name,
-        password,
-        emailVerified: true, // invite proves ownership (§7.1)
-      });
-      for (const g of liveGrants) {
-        await tx.actMembership.create({
-          data: { actId: g.actId, userId: created.id, role: g.role },
-        });
-      }
-      await tx.invitation.update({
-        where: { id: invite.id },
-        data: { acceptedAt: new Date() },
-      });
-    });
-
-    // Establish a session for the new user (nextCookies sets the cookie).
-    await auth.api
-      .signInEmail({ body: { email, password }, headers: hdrs })
-      .catch(() => undefined);
-
-    revalidatePath("/acts");
-    return { ok: true, data: { createdAccount: true } };
+/** Validate token + rate limit and resolve still-existing act grants. */
+async function loadInviteForAccept(
+  token: string,
+): Promise<LoadedInvite | InviteErrorCode> {
+  const invite = await prisma.invitation.findUnique({
+    where: { tokenHash: hashInviteToken(token) },
   });
+  if (!invite || invite.acceptedAt || invite.expiresAt < new Date()) {
+    return "invalid";
+  }
+
+  const email = normalizeEmail(invite.email);
+  const hdrs = await headers();
+  const ip =
+    hdrs.get("x-forwarded-for")?.split(",")[0]?.trim() ??
+    hdrs.get("x-real-ip") ??
+    "unknown";
+  const rl = await consumeRateLimit("invite_accept", ip, email);
+  if (!rl.allowed) return "rate-limited";
+
+  const grants = parseGrants(invite.grants);
+  // Skip grants for acts that no longer exist (§15.4).
+  const acts = await prisma.act.findMany({
+    where: { id: { in: grants.map((g) => g.actId) } },
+    select: { id: true },
+  });
+  const liveActIds = new Set(acts.map((a) => a.id));
+  return {
+    inviteId: invite.id,
+    email,
+    liveGrants: grants.filter((g) => liveActIds.has(g.actId)),
+  };
+}
+
+/** Case 1: existing account, already signed in with the invited email. */
+export async function acceptInviteSignedInAction(
+  formData: FormData,
+): Promise<void> {
+  const token = String(formData.get("token") ?? "");
+  if (!token) redirect("/login");
+
+  let error: InviteErrorCode | null = null;
+  try {
+    const loaded = await loadInviteForAccept(token);
+    if (typeof loaded === "string") {
+      error = loaded;
+    } else {
+      const session = await getSession();
+      if (!session || normalizeEmail(session.email) !== loaded.email) {
+        error = "wrong-account";
+      } else {
+        await applyGrantsAndAccept(session.id, loaded.inviteId, loaded.liveGrants);
+      }
+    }
+  } catch (err) {
+    console.error("[invite] signed-in accept failed:", err);
+    error = "generic";
+  }
+  if (error) inviteErrorRedirect(token, error);
+  revalidatePath("/acts");
+  redirect("/acts");
+}
+
+/** Case 2: existing account, not signed in — sign in and accept in one step. */
+export async function signInAndAcceptAction(formData: FormData): Promise<void> {
+  const token = String(formData.get("token") ?? "");
+  const password = String(formData.get("password") ?? "");
+  if (!token) redirect("/login");
+
+  let error: InviteErrorCode | null = null;
+  try {
+    const loaded = await loadInviteForAccept(token);
+    if (typeof loaded === "string") {
+      error = loaded;
+    } else if (!password) {
+      error = "bad-password";
+    } else {
+      const existingUser = await prisma.user.findUnique({
+        where: { email: loaded.email },
+        select: { id: true },
+      });
+      if (!existingUser) {
+        error = "invalid";
+      } else {
+        try {
+          // nextCookies sets the session cookie from this server-side call.
+          await auth.api.signInEmail({
+            body: { email: loaded.email, password },
+            headers: await headers(),
+          });
+        } catch (err) {
+          error =
+            err instanceof APIError && err.status === "TOO_MANY_REQUESTS"
+              ? "rate-limited"
+              : "bad-password";
+        }
+        if (!error) {
+          await applyGrantsAndAccept(
+            existingUser.id,
+            loaded.inviteId,
+            loaded.liveGrants,
+          );
+        }
+      }
+    }
+  } catch (err) {
+    console.error("[invite] sign-in accept failed:", err);
+    error = "generic";
+  }
+  if (error) inviteErrorRedirect(token, error);
+  revalidatePath("/acts");
+  redirect("/acts");
+}
+
+/** Case 3: no account yet — create it, apply grants, sign in. */
+export async function createAccountAndAcceptAction(
+  formData: FormData,
+): Promise<void> {
+  const token = String(formData.get("token") ?? "");
+  const name = String(formData.get("name") ?? "").trim();
+  const password = String(formData.get("password") ?? "");
+  const confirm = String(formData.get("confirm") ?? "");
+  if (!token) redirect("/login");
+
+  let error: InviteErrorCode | null = null;
+  try {
+    const loaded = await loadInviteForAccept(token);
+    if (typeof loaded === "string") {
+      error = loaded;
+    } else if (
+      await prisma.user.findUnique({
+        where: { email: loaded.email },
+        select: { id: true },
+      })
+    ) {
+      error = "have-account";
+    } else if (!name || name.length > 120) {
+      error = "name-required";
+    } else if (password.length < 10) {
+      error = "password-short";
+    } else if (password !== confirm) {
+      error = "password-mismatch";
+    } else {
+      await prisma.$transaction(async (tx) => {
+        const created = await createCredentialUser(tx, {
+          email: loaded.email,
+          name,
+          password,
+          emailVerified: true, // invite proves ownership (§7.1)
+        });
+        for (const g of loaded.liveGrants) {
+          await tx.actMembership.create({
+            data: { actId: g.actId, userId: created.id, role: g.role },
+          });
+        }
+        await tx.invitation.update({
+          where: { id: loaded.inviteId },
+          data: { acceptedAt: new Date() },
+        });
+      });
+
+      // Establish a session for the new user (nextCookies sets the cookie).
+      await auth.api
+        .signInEmail({
+          body: { email: loaded.email, password },
+          headers: await headers(),
+        })
+        .catch(() => undefined);
+    }
+  } catch (err) {
+    console.error("[invite] account creation failed:", err);
+    error = "generic";
+  }
+  if (error) inviteErrorRedirect(token, error);
+  revalidatePath("/acts");
+  redirect("/acts");
 }
 
 /** Upsert memberships keeping the higher role; stamp acceptedAt. */

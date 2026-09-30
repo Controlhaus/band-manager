@@ -30,6 +30,7 @@ export const auth = betterAuth({
     disableSignUp: true,
     minPasswordLength: 10,
     autoSignIn: false,
+    resetPasswordTokenExpiresIn: 60 * 60 * 24, // 24h (default 1h expires before many users click)
     sendResetPassword: async ({ user, url }) => {
       await sendPasswordResetEmail(user.email, url);
     },

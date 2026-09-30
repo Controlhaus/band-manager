@@ -42,7 +42,11 @@ export function ResetPasswordForm({ token }: { token: string }) {
       });
       return;
     }
-    toast({ title: "Password updated", description: "You can now sign in." });
+    toast({
+      title: "Password updated",
+      description:
+        "You can now sign in. Accepting an invitation? Reopen the invite link afterwards.",
+    });
     router.push("/login");
   }
 

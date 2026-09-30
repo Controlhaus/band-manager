@@ -155,6 +155,7 @@ enum NotificationType {
   DATE_CONFIRMED
   ENTRY_CHANGED
   BOOKING_CANCELLED
+  MEMBER_ADDED
 }
 
 // Set List library — a set entry is either a song reference or a "banter"

@@ -3,6 +3,7 @@ import { requireSession } from "@/lib/session";
 import { loadActForUser } from "@/lib/act-access";
 import { prisma } from "@/lib/prisma";
 import { can } from "@/lib/roles";
+import { isSuperadmin } from "@/lib/permissions";
 import {
   Card,
   CardContent,
@@ -11,6 +12,10 @@ import {
 } from "@/components/ui/card";
 import { MemberRow } from "@/components/members/member-row";
 import { ActInviteDialog } from "@/components/members/act-invite-dialog";
+import {
+  AddMemberDialog,
+  type MemberCandidate,
+} from "@/components/members/add-member-dialog";
 
 export default async function MembersPage({
   params,
@@ -30,6 +35,30 @@ export default async function MembersPage({
     orderBy: [{ role: "asc" }, { user: { name: "asc" } }],
   });
 
+  // Users addable without an invite: active users visible to the caller
+  // (members of acts they administer; superadmins see everyone) who aren't
+  // already in this act. Scoping prevents user enumeration.
+  let candidates: MemberCandidate[] = [];
+  if (manage) {
+    const memberIds = memberships.map((m) => m.userId);
+    const visibility = isSuperadmin(user)
+      ? {}
+      : {
+          memberships: {
+            some: {
+              act: {
+                memberships: { some: { userId: user.id, role: "ADMIN" as const } },
+              },
+            },
+          },
+        };
+    candidates = await prisma.user.findMany({
+      where: { isActive: true, id: { notIn: memberIds }, ...visibility },
+      select: { id: true, name: true, email: true },
+      orderBy: { name: "asc" },
+    });
+  }
+
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
@@ -39,7 +68,14 @@ export default async function MembersPage({
             {memberships.length} member{memberships.length === 1 ? "" : "s"}
           </p>
         </div>
-        {manage && <ActInviteDialog actId={act.id} />}
+        {manage && (
+          <div className="flex items-center gap-2">
+            {candidates.length > 0 && (
+              <AddMemberDialog actId={act.id} candidates={candidates} />
+            )}
+            <ActInviteDialog actId={act.id} />
+          </div>
+        )}
       </div>
 
       <Card>

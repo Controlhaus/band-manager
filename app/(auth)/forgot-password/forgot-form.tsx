@@ -7,7 +7,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { toast } from "@/hooks/use-toast";
 
-export function ForgotPasswordForm() {
+export function ForgotPasswordForm({ defaultEmail }: { defaultEmail?: string }) {
   const [pending, setPending] = React.useState(false);
   const [sent, setSent] = React.useState(false);
 
@@ -50,7 +50,13 @@ export function ForgotPasswordForm() {
     <form onSubmit={onSubmit} className="space-y-4">
       <div className="space-y-2">
         <Label htmlFor="email">Email</Label>
-        <Input id="email" name="email" type="email" required />
+        <Input
+          id="email"
+          name="email"
+          type="email"
+          defaultValue={defaultEmail ?? ""}
+          required
+        />
       </div>
       <Button type="submit" className="w-full" disabled={pending}>
         {pending ? "Sending…" : "Send reset link"}

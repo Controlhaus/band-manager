@@ -7,7 +7,12 @@ import {
 } from "@/components/ui/card";
 import { ForgotPasswordForm } from "./forgot-form";
 
-export default function ForgotPasswordPage() {
+export default async function ForgotPasswordPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ email?: string }>;
+}) {
+  const { email } = await searchParams;
   return (
     <Card>
       <CardHeader>
@@ -17,7 +22,7 @@ export default function ForgotPasswordPage() {
         </CardDescription>
       </CardHeader>
       <CardContent>
-        <ForgotPasswordForm />
+        <ForgotPasswordForm defaultEmail={email} />
       </CardContent>
     </Card>
   );

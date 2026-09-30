@@ -5,9 +5,16 @@ import { prisma } from "@/lib/prisma";
 import { getSession } from "@/lib/session";
 import {
   AuthorizationError,
+  isSuperadmin,
   requireCapability,
   type SessionUser,
 } from "@/lib/permissions";
+import { higherRole } from "@/lib/roles";
+import {
+  createNotifications,
+  emailNotifications,
+  type NotificationInput,
+} from "@/lib/notifications";
 import { runAction, type ActionResult } from "@/lib/action";
 
 async function requireUser(): Promise<SessionUser> {
@@ -31,6 +38,78 @@ const roleSchema = z.object({
   userId: z.string().min(1),
   role: z.enum(["ADMIN", "MEMBER", "READONLY"]),
 });
+
+/**
+ * Add an existing user to an act directly (no email round trip). Existing
+ * memberships are kept at the higher of the two roles. To prevent user
+ * enumeration, non-superadmins may only add users who already share an act
+ * they administer (the UI picker is scoped the same way).
+ */
+export async function addMemberToAct(
+  input: z.infer<typeof roleSchema>,
+): Promise<ActionResult> {
+  return runAction(async () => {
+    const user = await requireUser();
+    const { actId, userId, role } = roleSchema.parse(input);
+    await requireCapability(user, actId, "act:manageMembers");
+
+    const target = await prisma.user.findUnique({
+      where: { id: userId },
+      select: { id: true, isActive: true },
+    });
+    if (!target?.isActive) return { ok: false, error: "User not found." };
+
+    if (!isSuperadmin(user)) {
+      const adminActs = await prisma.actMembership.findMany({
+        where: { userId: user.id, role: "ADMIN" },
+        select: { actId: true },
+      });
+      const shared = await prisma.actMembership.findFirst({
+        where: { userId, actId: { in: adminActs.map((a) => a.actId) } },
+        select: { id: true },
+      });
+      if (!shared) return { ok: false, error: "User not found." };
+    }
+
+    const act = await prisma.act.findUnique({
+      where: { id: actId },
+      select: { slug: true, name: true },
+    });
+    if (!act) return { ok: false, error: "Act not found." };
+
+    const existing = await prisma.actMembership.findUnique({
+      where: { actId_userId: { actId, userId } },
+    });
+    if (existing) {
+      const merged = higherRole(existing.role, role);
+      if (merged === existing.role) {
+        return {
+          ok: false,
+          error: "Already a member with this role or higher.",
+        };
+      }
+      await prisma.actMembership.update({
+        where: { id: existing.id },
+        data: { role: merged },
+      });
+    } else {
+      const notification: NotificationInput = {
+        type: "MEMBER_ADDED",
+        title: `You've been added to ${act.name}`,
+        body: `You are now a ${role.toLowerCase()} of ${act.name} on Band Manager.`,
+        linkPath: `/acts/${act.slug}`,
+      };
+      await prisma.$transaction(async (tx) => {
+        await tx.actMembership.create({ data: { actId, userId, role } });
+        await createNotifications(tx, [userId], notification);
+      });
+      await emailNotifications([userId], notification);
+    }
+
+    revalidatePath(`/acts/${act.slug}/members`);
+    return { ok: true };
+  });
+}
 
 export async function updateMembershipRole(
   input: z.infer<typeof roleSchema>,
