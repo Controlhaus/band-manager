@@ -2,6 +2,7 @@
 import { z } from "zod";
 import { revalidatePath } from "next/cache";
 import { prisma } from "@/lib/prisma";
+import { auth } from "@/lib/auth";
 import { getSession } from "@/lib/session";
 import {
   AuthorizationError,
@@ -101,6 +102,28 @@ export async function setUserActive(
       await prisma.session.deleteMany({ where: { userId } });
     }
     revalidatePath("/admin");
+    return { ok: true };
+  });
+}
+
+const resetSchema = z.object({ userId: z.string().min(1) });
+
+export async function sendPasswordReset(
+  input: z.infer<typeof resetSchema>,
+): Promise<ActionResult> {
+  return runAction(async () => {
+    await requireSuperadminUser();
+    const { userId } = resetSchema.parse(input);
+
+    const target = await prisma.user.findUnique({ where: { id: userId } });
+    if (!target) return { ok: false, error: "User not found." };
+    if (!target.isActive) {
+      return { ok: false, error: "User is deactivated. Activate them first." };
+    }
+
+    await auth.api.forgetPassword({
+      body: { email: target.email, redirectTo: "/reset-password" },
+    });
     return { ok: true };
   });
 }

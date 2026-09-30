@@ -5,6 +5,7 @@ import { MoreHorizontal } from "lucide-react";
 import {
   updateUserGlobalRole,
   setUserActive,
+  sendPasswordReset,
   deleteUser,
 } from "@/app/actions/admin";
 import { Button } from "@/components/ui/button";
@@ -75,6 +76,14 @@ export function UserActions({
           }
         >
           {isActive ? "Deactivate" : "Activate"}
+        </DropdownMenuItem>
+        <DropdownMenuItem
+          disabled={!isActive}
+          onClick={() =>
+            run(() => sendPasswordReset({ userId }), "Password reset email sent")
+          }
+        >
+          Send reset password email
         </DropdownMenuItem>
         <DropdownMenuSeparator />
         <DropdownMenuItem
